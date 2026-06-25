@@ -4,13 +4,11 @@ import (
 	"sync"
 
 	"wacalls/internal/voip/call"
-	"wacalls/internal/voip/media"
 )
 
 type activeCall struct {
-	cm          *call.CallManager
-	bridge      *Bridge
-	browserOpus media.Codec
+	cm     *call.CallManager
+	bridge *Bridge
 }
 
 type callRegistry struct {
@@ -52,16 +50,16 @@ func (r *callRegistry) count() int {
 	return len(r.calls)
 }
 
-func (r *callRegistry) setBridge(callID string, b *Bridge, oc media.Codec) (*Bridge, media.Codec, bool) {
+func (r *callRegistry) setBridge(callID string, b *Bridge) (*Bridge, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ac, ok := r.calls[callID]
 	if !ok {
-		return nil, nil, false
+		return nil, false
 	}
-	oldB, oldOC := ac.bridge, ac.browserOpus
-	ac.bridge, ac.browserOpus = b, oc
-	return oldB, oldOC, true
+	oldB := ac.bridge
+	ac.bridge = b
+	return oldB, true
 }
 
 func (r *callRegistry) drain() []*activeCall {

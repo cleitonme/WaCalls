@@ -153,13 +153,33 @@ func (m *CallManager) AcceptCall(ctx context.Context, callID string) error {
 		acceptNode, err := signaling.BuildAcceptStanza(ctx, m.sock, callID, key, peer, creator, isVideo)
 		if err != nil {
 			m.log.Error("build accept failed", "err", err)
-		} else if _, err := m.sock.Query(ctx, acceptNode); err != nil {
-			m.log.Error("accept query error", "err", err)
+		} else {
+			ackNode, qErr := m.sock.Query(ctx, acceptNode)
+			if qErr != nil {
+				m.log.Error("accept query error", "err", qErr)
+			} else if ackNode != nil {
+				parsed := signaling.ParseRelayFromAck(ackNode)
+				m.log.Info("accept ack received", "call_id", callID,
+					"relays", len(parsed.Relays), "participants", len(parsed.ParticipantJids))
+				if len(parsed.Relays) > 0 {
+					m.mu.Lock()
+					if call.RelayData == nil {
+						call.RelayData = &core.RelayData{}
+					}
+					call.RelayData.Endpoints = parsed.Relays
+					relayData = call.RelayData
+					m.mu.Unlock()
+				}
+			} else {
+				m.log.Warn("accept ack was nil (no response within timeout)", "call_id", callID)
+			}
 		}
 	}
 
 	if relayData != nil {
 		m.connectRelays(relayData.Endpoints)
+	} else {
+		m.log.Warn("call accepted but no relay endpoints yet; media path waits for a transport message", "call_id", callID)
 	}
 	m.log.Info("call accepted", "call_id", callID)
 	return nil

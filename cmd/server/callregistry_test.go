@@ -50,7 +50,7 @@ func TestCallRegistryDrain(t *testing.T) {
 
 func TestCallRegistrySetBridgeMissing(t *testing.T) {
 	r := newCallRegistry()
-	_, _, found := r.setBridge("nope", nil, nil)
+	_, found := r.setBridge("nope", nil)
 	if found {
 		t.Fatal("setBridge on missing call must report not-found")
 	}

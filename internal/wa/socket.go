@@ -88,6 +88,21 @@ func (s *Socket) DecryptCallKey(ctx context.Context, from types.JID, encChild *w
 }
 
 func (s *Socket) GetTCToken(ctx context.Context, jid types.JID) ([]byte, error) {
+	if s.cli.Store == nil || s.cli.Store.PrivacyTokens == nil {
+		return nil, nil
+	}
+	for _, cand := range []types.JID{s.ResolveLIDForPN(ctx, jid).ToNonAD(), jid.ToNonAD()} {
+		if cand.IsEmpty() {
+			continue
+		}
+		tok, err := s.cli.Store.PrivacyTokens.GetPrivacyToken(ctx, cand)
+		if err != nil {
+			return nil, err
+		}
+		if tok != nil && len(tok.Token) > 0 {
+			return tok.Token, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -97,6 +112,11 @@ func (s *Socket) ResolveLIDForPN(ctx context.Context, pn types.JID) types.JID {
 	}
 	if s.cli.Store != nil && s.cli.Store.LIDs != nil {
 		if lid, err := s.cli.Store.LIDs.GetLIDForPN(ctx, pn); err == nil && !lid.IsEmpty() {
+			return lid
+		}
+	}
+	if info, err := s.cli.GetUserInfo(ctx, []types.JID{pn}); err == nil {
+		if lid := info[pn].LID; !lid.IsEmpty() {
 			return lid
 		}
 	}

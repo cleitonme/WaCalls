@@ -160,6 +160,8 @@ func (m *CallManager) HandleCallTransport(ctx context.Context, node *waBinary.No
 		return
 	}
 	relays := signaling.ExtractRelayEndpoints(info.InnerNode)
+	m.log.Info("call transport received", "call_id", call.CallID,
+		"relays", len(relays), "already_connected", m.relay.HasConnection())
 	if len(relays) > 0 && !m.relay.HasConnection() {
 		m.mu.Lock()
 		if call.RelayData == nil {

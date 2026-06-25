@@ -9,7 +9,6 @@ import (
 
 	"wacalls/internal/voip/call"
 	"wacalls/internal/voip/core"
-	"wacalls/internal/voip/media"
 	"wacalls/internal/voip/signaling"
 	"wacalls/internal/voip/wanode"
 	"wacalls/internal/wa"
@@ -90,15 +89,10 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 	}
 	cm.OnPeerAudio = func(pcm16 []float32) {
 		ac, ok := s.reg.get(callID)
-		if !ok || ac.bridge == nil || ac.browserOpus == nil {
+		if !ok || ac.bridge == nil {
 			return
 		}
-		pcm48 := media.Upsample16to48(pcm16)
-		opus, err := ac.browserOpus.Encode(pcm48)
-		if err != nil || len(opus) == 0 {
-			return
-		}
-		_ = ac.bridge.WriteOpus(opus, 60*time.Millisecond)
+		_ = ac.bridge.WritePCM(pcm16)
 	}
 }
 
@@ -234,20 +228,14 @@ func (s *Session) info() SessionInfo {
 	return SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != ""}
 }
 
-func (s *Session) setBridge(callID string, b *Bridge, oc media.Codec) {
-	oldB, oldOC, found := s.reg.setBridge(callID, b, oc)
+func (s *Session) setBridge(callID string, b *Bridge) {
+	oldB, found := s.reg.setBridge(callID, b)
 	if !found {
 		b.Close()
-		if oc != nil {
-			oc.Close()
-		}
 		return
 	}
 	if oldB != nil {
 		oldB.Close()
-	}
-	if oldOC != nil {
-		oldOC.Close()
 	}
 }
 
@@ -258,9 +246,6 @@ func (s *Session) removeCall(callID string) {
 	}
 	if ac.bridge != nil {
 		ac.bridge.Close()
-	}
-	if ac.browserOpus != nil {
-		ac.browserOpus.Close()
 	}
 }
 
@@ -277,9 +262,6 @@ func (s *Session) teardownAllCalls() {
 		_ = ac.cm.EndCall(context.Background(), core.EndCallReasonUserEnded)
 		if ac.bridge != nil {
 			ac.bridge.Close()
-		}
-		if ac.browserOpus != nil {
-			ac.browserOpus.Close()
 		}
 	}
 }
