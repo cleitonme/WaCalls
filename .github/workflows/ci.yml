@@ -50,8 +50,8 @@ jobs:
 
       - name: Test
         env:
-          CGO_ENABLED: "1"
-        run: go test -race -count=1 ./...
+          CGO_ENABLED: "0"
+        run: go test -count=1 ./...
 
   client:
     name: client

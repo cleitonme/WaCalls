@@ -1,7 +1,6 @@
 /docs
 /wacalls-server.exe
 /wacalls.exe
-run-mlow.ps1
 *.exe
 *.test
 *.out
@@ -34,5 +33,3 @@ Thumbs.db
 .vscode/
 *.swp
 *~
-!native/
-!native/*.dll
