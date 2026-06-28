@@ -1,7 +1,11 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -15,8 +19,10 @@ import (
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionList)
 	mux.HandleFunc("POST /api/sessions", s.handleSessionCreate)
+	mux.HandleFunc("GET /api/sessions/{sid}/calls", s.handleSessionCalls)
 	mux.HandleFunc("DELETE /api/sessions/{sid}", s.handleSessionDelete)
 	mux.HandleFunc("POST /api/sessions/{sid}/logout", s.handleSessionLogout)
 	mux.HandleFunc("POST /api/sessions/{sid}/pair", s.handleSessionPair)
@@ -34,17 +40,52 @@ func (s *server) routes() http.Handler {
 			mux.Handle("/", http.FileServer(http.Dir(s.staticDir)))
 		}
 	}
-	return withCORS(mux)
+	var handler http.Handler = mux
+	key := os.Getenv("WACALLS_API_KEY")
+	if key == "" {
+		key = generateAPIKey()
+		log.Printf("WACALLS_API_KEY not set, generated key: %s", key)
+	}
+	handler = withAuth(handler, key)
+	return withCORS(handler)
+}
+
+func generateAPIKey() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("failed to generate API key: %v", err))
+	}
+	return hex.EncodeToString(b)
 }
 
 func withCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Client-Id")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Client-Id, X-API-Key")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// withAuth protege as rotas /api/* com uma API key (header X-API-Key ou ?apiKey=).
+// Exceções: os arquivos estáticos do painel (precisam carregar a tela de login).
+func withAuth(h http.Handler, key string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		guarded := strings.HasPrefix(p, "/api/")
+		if guarded {
+			got := r.Header.Get("X-API-Key")
+			if got == "" {
+				got = r.URL.Query().Get("apiKey")
+			}
+			if got != key {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				return
+			}
 		}
 		h.ServeHTTP(w, r)
 	})
@@ -76,8 +117,25 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	s.broker.serveSSE(w, r, clientID(r))
 }
 
+func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"maxCallsPerSession": s.sessions.maxCalls,
+	})
+}
+
 func (s *server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": s.sessions.infos()})
+}
+
+func (s *server) handleSessionCalls(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active":             sess.reg.count(),
+		"maxCallsPerSession": s.sessions.maxCalls,
+	})
 }
 
 func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
@@ -172,10 +230,8 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 		return
 	}
 	owner := clientID(r)
-	if other := s.broker.ownerActiveCall(owner); other != "" {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "operator already on a call"})
-		return
-	}
+	// (removido) regra "1 chamada por operador" — agora o mesmo navegador/aba
+	// pode disparar várias ligações na mesma sessão (até -max-calls-per-session).
 	if max := s.sessions.maxCalls; max > 0 && sess.reg.count() >= max {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "max concurrent calls"})
 		return

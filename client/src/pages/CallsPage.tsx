@@ -22,12 +22,21 @@ export const CallsPage = ({ sid }: { sid: string }) => {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          {mine.length} active call{mine.length === 1 ? "" : "s"}
-        </h2>
-        <HistoryDrawer sid={sid} />
-      </div>
+        <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <h2 className="text-sm font-medium text-muted-foreground">
+                    {mine.length} active call{mine.length === 1 ? "" : "s"}
+                </h2>
+                <button
+                    onClick={() => navigator.clipboard.writeText(sid)}
+                    className="font-mono text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                    title="Copy session ID"
+                >
+                    {sid}
+                </button>
+            </div>
+            <HistoryDrawer sid={sid} />
+        </div>
       <Dialer sid={sid} />
       {mine.length > 0 ? (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

@@ -1,0 +1,263 @@
+openapi: 3.0.3
+info:
+  title: WaCalls API
+  version: "1.0.0"
+  description: |
+    API HTTP do **WaCalls** — chamadas de voz do WhatsApp pelo navegador.
+
+    ## Autenticação
+    Não há login/senha. Todas as rotas aceitam o header **`X-Client-Id`** (qualquer
+    identificador estável), usado para marcar o "dono" das chamadas e filtrar eventos.
+
+    > ⚠️ A API inicia/controla as chamadas (sinalização), mas o **áudio** exige um cliente
+    > WebRTC (navegador) com captura de microfone — não é possível só com chamadas HTTP.
+servers:
+  - url: /
+    description: Mesma origem do painel
+
+tags:
+  - name: Sessões
+    description: Contas WhatsApp (cada sessão = um device linkado)
+  - name: Chamadas
+    description: Iniciar, atender, rejeitar e encerrar chamadas
+  - name: Eventos & Histórico
+
+security:
+  - apiKeyAuth: []
+
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: "API key definida em WACALLS_API_KEY (vazia = sem autenticação)"
+  parameters:
+    ClientId:
+      name: X-Client-Id
+      in: header
+      required: false
+      schema: { type: string, example: meuapp }
+      description: Identificador do cliente (dono da chamada / filtro de eventos).
+    Sid:
+      name: sid
+      in: path
+      required: true
+      schema: { type: string }
+      description: ID da sessão (conta WhatsApp).
+    CallId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: ID da chamada.
+  schemas:
+    Session:
+      type: object
+      properties:
+        id: { type: string, example: 6458cca60a17c0cefa71de9da9dc92a2 }
+        name: { type: string, example: WhatsApp }
+        jid: { type: string, example: "556192264108:13@s.whatsapp.net" }
+        state: { type: string, enum: [open, connecting, close], example: open }
+        paired: { type: boolean, example: true }
+    StartCallRequest:
+      type: object
+      required: [phone]
+      properties:
+        phone: { type: string, example: "5561999999999", description: "DDI+DDD+número" }
+        duration_ms: { type: integer, example: 300000 }
+        record: { type: boolean, example: false }
+
+paths:
+  /api/config:
+    get:
+      tags: [Sessões]
+      summary: Configuração do servidor (limite de chamadas simultâneas)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  maxCallsPerSession: { type: integer, example: 8, description: "Máx. de chamadas simultâneas por sessão (0 = ilimitado)" }
+
+  /api/sessions:
+    get:
+      tags: [Sessões]
+      summary: Lista as contas
+      parameters: [{ $ref: "#/components/parameters/ClientId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Session" }
+    post:
+      tags: [Sessões]
+      summary: Cria uma conta
+      parameters: [{ $ref: "#/components/parameters/ClientId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, example: "Minha conta" }
+      responses:
+        "200":
+          description: Criada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { id: { type: string } }
+
+  /api/sessions/{sid}:
+    delete:
+      tags: [Sessões]
+      summary: Remove a conta
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "204": { description: Removida }
+
+  /api/sessions/{sid}/pair:
+    post:
+      tags: [Sessões]
+      summary: Inicia o pareamento (QR sai via SSE)
+      description: Dispara a geração do QR Code; acompanhe os eventos `session-qr` / `auth-state` em `/api/events`.
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "204": { description: Pareamento iniciado }
+
+  /api/sessions/{sid}/logout:
+    post:
+      tags: [Sessões]
+      summary: Desconecta a conta (mantém a sessão)
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "204": { description: Desconectada }
+
+  /api/sessions/{sid}/calls:
+    get:
+      tags: [Chamadas]
+      summary: Quantas chamadas ativas a sessão tem (e o limite)
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: integer, example: 2 }
+                  maxCallsPerSession: { type: integer, example: 8 }
+    post:
+      tags: [Chamadas]
+      summary: Inicia uma chamada (faz o número de destino tocar)
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartCallRequest" }
+      responses:
+        "200":
+          description: Chamada iniciada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  call:
+                    type: object
+                    properties: { callId: { type: string } }
+        "503": { description: Conta não pareada }
+
+  /api/sessions/{sid}/calls/{id}/accept:
+    post:
+      tags: [Chamadas]
+      summary: Atende uma chamada recebida
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200": { description: Atendida }
+
+  /api/sessions/{sid}/calls/{id}/reject:
+    post:
+      tags: [Chamadas]
+      summary: Rejeita uma chamada recebida
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200": { description: Rejeitada }
+
+  /api/sessions/{sid}/calls/{id}:
+    delete:
+      tags: [Chamadas]
+      summary: Encerra a chamada
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "204": { description: Encerrada }
+
+  /api/sessions/{sid}/history:
+    get:
+      tags: [Eventos & Histórico]
+      summary: Histórico de chamadas da conta (últimas 50)
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rows:
+                    type: array
+                    items: { type: object }
+
+  /api/events:
+    get:
+      tags: [Eventos & Histórico]
+      summary: Stream de eventos em tempo real (SSE)
+      description: |
+        Server-Sent Events. Tipos: `session-list`, `session-qr`, `auth-state`,
+        `call-list`, `call-status`, `call-ended`, `incoming`, `incoming-claimed`.
+      parameters:
+        - name: clientId
+          in: query
+          schema: { type: string }
+          description: Identificador do cliente.
+      responses:
+        "200":
+          description: Stream text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }

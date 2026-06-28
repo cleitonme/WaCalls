@@ -63,7 +63,8 @@ export const Sidebar = ({ onNavigate }: { onNavigate?: () => void }) => {
             <span className={cn("h-2 w-2 shrink-0 rounded-full", dotClass[s.state])} />
             <div className="min-w-0 flex-1">
               <p className="truncate font-medium">{s.name}</p>
-              {s.jid && <p className="truncate text-xs text-muted-foreground">{s.jid.split("@")[0]}</p>}
+                {s.jid && <p className="truncate text-xs text-muted-foreground">{s.jid.split("@")[0]}</p>}
+                <p className="truncate text-xs text-muted-foreground/60">{s.id}</p>
             </div>
             <button
               onClick={(e) => {

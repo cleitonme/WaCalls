@@ -1,3 +1,4 @@
+import { getApiBase, getApiKey } from "./auth";
 import type { CallStatus } from "@/types/call";
 import type { SessionInfo, SessionState } from "@/types/session";
 
@@ -14,14 +15,14 @@ type CallListRow = {
 };
 
 export type BrokerEvent =
-  | { type: "session-list"; sessions: SessionInfo[] }
-  | { type: "session-qr"; sessionId: string; qr: string }
-  | { type: "auth-state"; sessionId: string; paired: boolean; state: SessionState; qr?: string }
-  | { type: "call-list"; calls: CallListRow[] }
-  | { type: "call-status"; sessionId: string; id: string; owner: string | null; status: CallStatus; peer: string; startedAt: number }
-  | { type: "call-ended"; sessionId: string; id: string; owner: string | null; reason: string; endedAt: number }
-  | { type: "incoming"; sessionId: string; id: string; peer: string; offeredAt: number }
-  | { type: "incoming-claimed"; sessionId: string; id: string; owner: string };
+    | { type: "session-list"; sessions: SessionInfo[] }
+    | { type: "session-qr"; sessionId: string; qr: string }
+    | { type: "auth-state"; sessionId: string; paired: boolean; state: SessionState; qr?: string }
+    | { type: "call-list"; calls: CallListRow[] }
+    | { type: "call-status"; sessionId: string; id: string; owner: string | null; status: CallStatus; peer: string; startedAt: number }
+    | { type: "call-ended"; sessionId: string; id: string; owner: string | null; reason: string; endedAt: number }
+    | { type: "incoming"; sessionId: string; id: string; peer: string; offeredAt: number }
+    | { type: "incoming-claimed"; sessionId: string; id: string; owner: string };
 
 type Listener = (ev: BrokerEvent) => void;
 
@@ -31,7 +32,8 @@ class EventStream {
 
   connect(clientId: string): void {
     if (this.#es) return;
-    this.#es = new EventSource(`/api/events?clientId=${encodeURIComponent(clientId)}`);
+    const url = `${getApiBase()}/api/events?clientId=${encodeURIComponent(clientId)}&apiKey=${encodeURIComponent(getApiKey())}`;
+    this.#es = new EventSource(url);
     this.#es.onmessage = (ev) => {
       try {
         const parsed: BrokerEvent = JSON.parse(ev.data);

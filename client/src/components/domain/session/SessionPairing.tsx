@@ -15,6 +15,8 @@ export const SessionPairing = ({ session }: { session: SessionInfo }) => {
         <CardHeader className="items-center text-center">
           <CardTitle>Pair {session.name}</CardTitle>
           <CardDescription>
+            <span className="font-mono text-xs text-muted-foreground">ID: {session.id}</span>
+            <br />
             Open WhatsApp → Linked devices → Link a device, then scan.
           </CardDescription>
         </CardHeader>

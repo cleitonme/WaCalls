@@ -19,39 +19,42 @@ export const Dialer = ({ sid }: { sid: string }) => {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Dialer</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <DeviceSelector />
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-            placeholder="+55 11 99999 9999"
-            inputMode="tel"
-            className="min-w-[200px] flex-1"
-          />
-          <Button
-            type="button"
-            variant={record ? "default" : "outline"}
-            size="sm"
-            onClick={() => setRecord((v) => !v)}
-            aria-pressed={record}
-          >
-            <Disc3 className="h-4 w-4" />
-            Record
-          </Button>
-          <Button onClick={submit} disabled={startCall.isPending || !phone.trim()}>
-            <Phone className="h-4 w-4" />
-            {startCall.isPending ? "Calling…" : "Call"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Dialer</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <DeviceSelector />
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+                placeholder="+55 11 99999 9999"
+                inputMode="tel"
+                className="min-w-[200px] flex-1"
+            />
+            <Button
+                type="button"
+                variant={record ? "default" : "outline"}
+                size="sm"
+                onClick={() => setRecord((v) => !v)}
+                aria-pressed={record}
+            >
+              <Disc3 className="h-4 w-4" />
+              Record
+            </Button>
+            <Button onClick={submit} disabled={startCall.isPending || !phone.trim()}>
+              <Phone className="h-4 w-4" />
+              {startCall.isPending ? "Calling…" : "Call"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Você pode fazer várias ligações ao mesmo tempo — disque outro número e uma nova chamada aparece abaixo.
+          </p>
+        </CardContent>
+      </Card>
   );
 };
