@@ -92,7 +92,11 @@ func (m *SessionManager) Restore(ctx context.Context) error {
 	}
 	for _, row := range rows {
 		if row.JID == "" {
-			_ = m.store.delete(ctx, row.ID)
+			// Mantém a sessão sem tentar conectar
+			device := m.container.NewDevice()
+			client := whatsmeow.NewClient(device, m.waLogger)
+			s := newSession(m, row.ID, row.Name, client)
+			m.register(s)
 			continue
 		}
 		jid, err := types.ParseJID(row.JID)
