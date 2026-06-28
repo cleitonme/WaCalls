@@ -1,0 +1,19 @@
+services:
+  wacalls:
+    build: .
+    image: whazing/wacalls:latest
+    ports:
+      - "8082:8080/tcp"
+      - "5000:5000/tcp"
+      - "5000:5000/udp"
+    environment:
+      - WACALLS_PUBLIC_IP=auto
+      - WACALLS_UDP_PORT=5000
+      - WACALLS_MAX_CALLS=4
+      - WACALLS_API_KEY=troque-esta-chave
+    volumes:
+      - wacalls-data:/data
+    restart: unless-stopped
+
+volumes:
+  wacalls-data:
