@@ -184,15 +184,28 @@ func (m *CallManager) HandleCallTransport(ctx context.Context, node *waBinary.No
 		return
 	}
 	relays := signaling.ExtractRelayEndpoints(info.InnerNode)
+
+	m.mu.Lock()
+	hasConn := m.relay.HasConnection()
+	// Incoming calls that have not been locally accepted yet must not connect to
+	// the relay here: other SIDs for the same number are also in IncomingRinging
+	// and would race to connect using the same relay token, dropping whichever
+	// session already owns the connection. We still store the endpoints so that
+	// AcceptCall can pick them up immediately when the user answers.
+	notYetAccepted := call.Direction == core.CallDirectionIncoming &&
+		call.StateData.State == core.CallStateIncomingRinging
 	m.log.Info("call transport received", "call_id", call.CallID,
-		"relays", len(relays), "already_connected", m.relay.HasConnection())
-	if len(relays) > 0 && !m.relay.HasConnection() {
-		m.mu.Lock()
+		"relays", len(relays), "already_connected", hasConn)
+	if len(relays) > 0 && !hasConn {
 		if call.RelayData == nil {
 			call.RelayData = &core.RelayData{}
 		}
 		call.RelayData.Endpoints = relays
-		m.mu.Unlock()
+	}
+	shouldConnect := len(relays) > 0 && !hasConn && !notYetAccepted
+	m.mu.Unlock()
+
+	if shouldConnect {
 		m.connectRelays(relays)
 	}
 }

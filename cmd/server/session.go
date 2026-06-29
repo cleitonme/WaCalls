@@ -65,7 +65,14 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 	cm.OnStateChange = func(c *call.CallInfo) {
 		if c.IsEnded() {
 			s.removeCall(c.CallID)
-			s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
+			// Only end the broker record if this session owns it. Sibling sessions
+			// for the same number may terminate with accepted_elsewhere while the
+			// accepting session is still active; letting them call endCall would
+			// broadcast call-ended for the active session's call and cause the
+			// frontend to tear it down.
+			if rec, ok := s.mgr.broker.getCall(c.CallID); !ok || rec.SessionID == s.id {
+				s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
+			}
 			return
 		}
 		dir := "outbound"
@@ -85,7 +92,9 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 	}
 	cm.OnEnded = func(c *call.CallInfo) {
 		s.removeCall(c.CallID)
-		s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
+		if rec, ok := s.mgr.broker.getCall(c.CallID); !ok || rec.SessionID == s.id {
+			s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
+		}
 	}
 	cm.OnPeerAudio = func(pcm16 []float32) {
 		ac, ok := s.reg.get(callID)
