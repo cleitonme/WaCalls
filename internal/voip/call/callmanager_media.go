@@ -23,6 +23,9 @@ func (m *CallManager) FeedCapturedPCM(data []float32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.onHold {
+		return
+	}
 	if m.codec == nil || m.rtpSession == nil || m.srtpSession == nil || !m.relay.HasConnection() {
 		return
 	}

@@ -214,6 +214,33 @@ paths:
         "200": { description: Rejeitada }
 
   /api/sessions/{sid}/calls/{id}:
+    get:
+      tags: [Chamadas]
+      summary: Consulta o estado de uma chamada específica
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, example: "ABCDEF1234" }
+                  sid: { type: string, example: "6458cca60a17c0cefa71de9da9dc92a2" }
+                  peer: { type: string, example: "5561999999999@s.whatsapp.net" }
+                  state:
+                    type: string
+                    enum: [active, held, transferring, ended, ringing, initiating, connecting]
+                    example: active
+                  direction:
+                    type: string
+                    enum: [incoming, outgoing]
+                    example: outgoing
+        "404": { description: Chamada não encontrada }
     delete:
       tags: [Chamadas]
       summary: Encerra a chamada
@@ -223,6 +250,116 @@ paths:
         - { $ref: "#/components/parameters/ClientId" }
       responses:
         "204": { description: Encerrada }
+
+  /api/sessions/{sid}/calls/{id}/hold:
+    put:
+      tags: [Chamadas]
+      summary: Coloca a chamada em espera (hold)
+      description: |
+        Pausa o áudio do browser → peer e começa a injetar um tom de espera (440 Hz)
+        no stream SRTP para o peer. A chamada WhatsApp permanece ativa.
+        Se `moh_url` não for informado, silêncio é enviado pelo keepalive interno.
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                moh_url:
+                  type: string
+                  format: uri
+                  description: URL do áudio de Music on Hold (opcional).
+                  example: "https://example.com/hold.mp3"
+      responses:
+        "200":
+          description: Chamada em hold
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  state: { type: string, example: held }
+        "404": { description: Chamada não encontrada }
+        "409": { description: Chamada não está em estado ativo }
+
+  /api/sessions/{sid}/calls/{id}/unhold:
+    put:
+      tags: [Chamadas]
+      summary: Remove o hold — retoma áudio normal
+      description: |
+        Para a injeção de Music on Hold e retoma o bridge WebRTC normal
+        (microfone do browser → peer, peer → browser).
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200":
+          description: Chamada ativa novamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  state: { type: string, example: active }
+        "404": { description: Chamada não encontrada }
+        "409": { description: Chamada não está em estado held }
+
+  /api/sessions/{sid}/calls/{id}/transfer:
+    post:
+      tags: [Chamadas]
+      summary: Transferência cega com fallback automático
+      description: |
+        Sequência:
+        1. Coloca `{id}` em hold automaticamente (injeta Music on Hold para o peer).
+        2. Na sessão `target_sid`, inicia uma chamada sainte para o mesmo peer.
+        3. Retorna imediatamente com o `transfer_call_id`.
+        4. Monitora assincronamente:
+           - **Peer atende** → encerra a chamada original; emite SSE `transfer-completed`.
+           - **Peer rejeita / timeout (60 s)** → encerra a transferência, restaura unhold; emite SSE `transfer-failed`.
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_sid]
+              properties:
+                target_sid:
+                  type: string
+                  description: ID da sessão de destino (deve ser diferente de `{sid}` e estar pareada).
+                  example: "abc123"
+                moh_url:
+                  type: string
+                  format: uri
+                  description: URL do áudio de Music on Hold enquanto aguarda o destino atender (opcional).
+                  example: "https://example.com/hold.mp3"
+      responses:
+        "200":
+          description: Transferência iniciada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  original_call_id: { type: string }
+                  transfer_call_id: { type: string }
+                  target_sid: { type: string }
+                  state: { type: string, example: transferring }
+        "400": { description: Parâmetros inválidos ou target_sid igual ao sid de origem }
+        "404": { description: Chamada ou sessão destino não encontrada }
+        "409": { description: Chamada não está em estado ativo }
+        "503": { description: Sessão destino não pareada }
 
   /api/sessions/{sid}/history:
     get:
@@ -248,8 +385,18 @@ paths:
       tags: [Eventos & Histórico]
       summary: Stream de eventos em tempo real (SSE)
       description: |
-        Server-Sent Events. Tipos: `session-list`, `session-qr`, `auth-state`,
+        Server-Sent Events. Tipos existentes: `session-list`, `session-qr`, `auth-state`,
         `call-list`, `call-status`, `call-ended`, `incoming`, `incoming-claimed`.
+
+        Tipos adicionados pelo sistema de hold/transferência:
+
+        | Tipo | Campos | Descrição |
+        |---|---|---|
+        | `call-held` | `id`, `sessionId` | Chamada entrou em hold |
+        | `call-unheld` | `id`, `sessionId` | Hold removido, áudio normal retomado |
+        | `transfer-started` | `original_call_id`, `transfer_call_id`, `sessionId` | Transferência iniciada |
+        | `transfer-completed` | `original_call_id`, `transfer_call_id`, `sessionId` | Peer atendeu; chamada original encerrada |
+        | `transfer-failed` | `original_call_id`, `transfer_call_id`, `sessionId`, `reason` (`rejected`\|`timeout`) | Transferência falhou; unhold automático |
       parameters:
         - name: clientId
           in: query

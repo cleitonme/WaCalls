@@ -42,6 +42,9 @@ type CallManager struct {
 	lastCaptureAt time.Time
 	keepaliveStop chan struct{}
 
+	onHold  bool
+	mohStop chan struct{}
+
 	OnStateChange func(*CallInfo)
 	OnIncoming    func(*CallInfo)
 	OnEnded       func(*CallInfo)

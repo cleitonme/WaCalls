@@ -203,6 +203,35 @@ func (b *Broker) emitIncomingClaimed(sessionID, id, owner string) {
 	b.broadcast(map[string]any{"type": "incoming-claimed", "sessionId": sessionID, "id": id, "owner": owner})
 }
 
+func (b *Broker) emitCallHeld(sessionID, callID string) {
+	b.broadcast(map[string]any{"type": "call-held", "id": callID, "sessionId": sessionID})
+}
+
+func (b *Broker) emitCallUnheld(sessionID, callID string) {
+	b.broadcast(map[string]any{"type": "call-unheld", "id": callID, "sessionId": sessionID})
+}
+
+func (b *Broker) emitTransferStarted(sessionID, origID, transferID string) {
+	b.broadcast(map[string]any{
+		"type": "transfer-started", "sessionId": sessionID,
+		"original_call_id": origID, "transfer_call_id": transferID,
+	})
+}
+
+func (b *Broker) emitTransferCompleted(sessionID, origID, transferID string) {
+	b.broadcast(map[string]any{
+		"type": "transfer-completed", "sessionId": sessionID,
+		"original_call_id": origID, "transfer_call_id": transferID,
+	})
+}
+
+func (b *Broker) emitTransferFailed(sessionID, origID, transferID, reason string) {
+	b.broadcast(map[string]any{
+		"type": "transfer-failed", "sessionId": sessionID,
+		"original_call_id": origID, "transfer_call_id": transferID, "reason": reason,
+	})
+}
+
 func (b *Broker) historyRows(sessionID string, limit int) []CallRecord {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

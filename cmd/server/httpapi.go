@@ -31,6 +31,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/reject", s.handleReject)
 	mux.HandleFunc("DELETE /api/sessions/{sid}/calls/{id}", s.handleEndCall)
+	mux.HandleFunc("GET /api/sessions/{sid}/calls/{id}", s.handleGetCall)
+	mux.HandleFunc("PUT /api/sessions/{sid}/calls/{id}/hold", s.handleHold)
+	mux.HandleFunc("PUT /api/sessions/{sid}/calls/{id}/unhold", s.handleUnhold)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/transfer", s.handleTransfer)
 	mux.HandleFunc("GET /api/sessions/{sid}/history", s.handleHistory)
 
 	mux.HandleFunc("GET /api/events", s.handleEvents)
@@ -67,7 +71,7 @@ func withCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Client-Id, X-API-Key")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -212,6 +216,85 @@ func (s *server) handleEndCall(w http.ResponseWriter, r *http.Request) {
 	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
 		s.doEndCall(sess, w, r)
 	}
+}
+
+func (s *server) handleGetCall(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	callID := r.PathValue("id")
+	ac, ok := sess.reg.get(callID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	ci := ac.cm.CurrentCall()
+	if ci == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	dir := "outgoing"
+	if ci.Direction == core.CallDirectionIncoming {
+		dir = "incoming"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":        ci.CallID,
+		"sid":       sess.id,
+		"peer":      ci.PeerJid,
+		"state":     string(ci.StateData.State),
+		"direction": dir,
+	})
+}
+
+func (s *server) handleHold(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	callID := r.PathValue("id")
+	ac, ok := sess.reg.get(callID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	var body struct {
+		MOHURL string `json:"moh_url"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := ac.cm.HoldCall(body.MOHURL); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	s.broker.emitCallHeld(sess.id, callID)
+	writeJSON(w, http.StatusOK, map[string]any{"id": callID, "state": "held"})
+}
+
+func (s *server) handleUnhold(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	callID := r.PathValue("id")
+	ac, ok := sess.reg.get(callID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	if err := ac.cm.UnholdCall(); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	s.broker.emitCallUnheld(sess.id, callID)
+	writeJSON(w, http.StatusOK, map[string]any{"id": callID, "state": "active"})
+}
+
+func (s *server) handleTransfer(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	s.doTransfer(sess, w, r)
 }
 
 func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
