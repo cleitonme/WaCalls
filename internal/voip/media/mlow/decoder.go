@@ -30,12 +30,19 @@ type MlowDecoder struct {
 	state      *SmplDecoderState
 	redundancy int32
 	log        zerolog.Logger
+	outBuf     []float32 // pre-allocated decode output (avoids alloc per active frame)
+	lagsBuf    []float32 // pre-allocated packet lags buffer
 }
 
 // NewMlowDecoder allocates a fresh decoder.
 func NewMlowDecoder(opts ...Option) *MlowDecoder {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/ed12f359a086b28e807ba236f0977af1000859fe/wacore/src/voip/mlow/decoder.rs#L36-L41
-	return &MlowDecoder{state: newSmplDecoderState(), log: resolveConfig(opts).log}
+	return &MlowDecoder{
+		state:   newSmplDecoderState(),
+		log:     resolveConfig(opts).log,
+		outBuf:  make([]float32, 0, 3*SmplIntfLen),
+		lagsBuf: make([]float32, 0, 3*8),
+	}
 }
 
 // SetRedundancy sets the negotiated RED redundancy level (0 = bare frames).
@@ -99,10 +106,10 @@ func (d *MlowDecoder) decodeFrame(frame []byte) []float32 {
 		d.log.Trace().Bool("sid", toc.SID).Bool("active", toc.Active).Msg("decode frame: inactive/SID, emitting silence")
 		return make([]float32, outLen)
 	}
-	return d.decodeActiveFrame(frame, outLen)
+	return d.decodeActiveFrame(frame, outLen, d.outBuf[:0], d.lagsBuf[:0])
 }
 
-func (d *MlowDecoder) decodeActiveFrame(frame []byte, outLen int) []float32 {
+func (d *MlowDecoder) decodeActiveFrame(frame []byte, outLen int, out, packetLags []float32) []float32 {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/ed12f359a086b28e807ba236f0977af1000859fe/wacore/src/voip/mlow/decoder.rs#L101-L217
 	config := int(frame[0]>>2) & 1
 	tbl := LoadSmplTables()
@@ -113,8 +120,7 @@ func (d *MlowDecoder) decodeActiveFrame(frame []byte, outLen int) []float32 {
 
 	d.log.Trace().Int("config", config).Bool("low_rate", lowRate).Int("body_bytes", len(frame)-1).Int("internal_frames", 3).Msg("decode active frame")
 
-	out := make([]float32, 0, 3*SmplIntfLen)
-	packetLags := make([]float32, 0, 3*8)
+	// out and packetLags are pre-allocated by the caller (reused across frames).
 	var avgNormBr float32
 	for f := 0; f < 3; f++ {
 		lsf := DecodeSmplLsf(dec, tbl, &d.state.Lstate, config, f)

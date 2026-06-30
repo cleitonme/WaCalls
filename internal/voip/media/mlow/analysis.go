@@ -53,6 +53,18 @@ type SmplEncoderState struct {
 	hpPitchHist []float32
 	ltpBuf      []float32
 	pitchEst    PitchEstState
+
+	// Pre-allocated working buffers for smplAnalyzeFrameSt — avoids per-frame heap allocs.
+	wPcmI16   []int16   // [960]
+	wPcmIn    []float32 // [960]
+	wHp       []float32 // [960]
+	wX        []float64 // [SmplOrder+960]
+	wXn       []float32 // [resLead+960]
+	wHpFull   []float32 // [smplLpcHistLen+960+smplWinnextWbLen]
+	wHpPitch  []float32 // [smplPitchLagMax]
+	wNumSurv []int16   // [smplMaxPulsesPerSf] — reused in runCelpSubframes
+	wXsubfr  []float32 // [2*SmplSubfrLen+32]  — reused in computePercCorrs
+	wEven    []float32 // [smplPercRLen]        — reused in computePercCorrs
 }
 
 func unvoicedPitch() SmplPitchSynth { return SmplPitchSynth{} }
@@ -86,6 +98,9 @@ type celpFrameCtx struct {
 	pitchEst           *PitchEstState
 	percCorrs          [][]float32
 	blockLags          [SmplSubfrCount][2]float32
+	wNumSurv []int16   // pre-allocated, borrowed from SmplEncoderState
+	wXsubfr  []float32 // pre-allocated, borrowed from SmplEncoderState
+	wEven    []float32 // pre-allocated, borrowed from SmplEncoderState
 }
 
 type frontEndLsf struct {
@@ -107,21 +122,36 @@ func smplAnalyzeFrameSt(es *SmplEncoderState, pcm []float32) SmplFrameParams {
 	}
 	synthT := LoadSmplSynthTables()
 
-	pcmI16 := make([]int16, need)
+	// Ensure working buffers are allocated (once per encoder lifetime).
+	const resLead = SmplOrder + smplWinnextWbLen
+	if len(es.wPcmI16) != need {
+		es.wPcmI16 = make([]int16, need)
+		es.wPcmIn = make([]float32, need)
+		es.wHp = make([]float32, need)
+		es.wX = make([]float64, SmplOrder+need)
+		es.wXn = make([]float32, resLead+need)
+		es.wHpFull = make([]float32, smplLpcHistLen+need+smplWinnextWbLen)
+		es.wHpPitch = make([]float32, smplPitchLagMax)
+	}
+
+	// PCM float32 → int16 without math.Round / float64 promotion.
 	for i := 0; i < need; i++ {
-		v := math.Round(float64(pcm[i] * 32768.0))
-		if v > 32767 {
-			v = 32767
+		v := pcm[i] * 32768.0
+		switch {
+		case v >= 32767.0:
+			es.wPcmI16[i] = 32767
+		case v <= -32768.0:
+			es.wPcmI16[i] = -32768
+		case v >= 0:
+			es.wPcmI16[i] = int16(v + 0.5)
+		default:
+			es.wPcmI16[i] = int16(v - 0.5)
 		}
-		if v < -32768 {
-			v = -32768
-		}
-		pcmI16[i] = int16(v)
 	}
 	if es.vad == nil {
 		es.vad = NewSmplVadState()
 	}
-	vad := es.vad.ProcessPacket(pcmI16, SmplIntfLen)
+	vad := es.vad.ProcessPacket(es.wPcmI16, SmplIntfLen)
 	spActProb := vad.VadResults
 	codedAsActiveVoice := vad.CodedAsActiveVoice
 
@@ -129,16 +159,18 @@ func smplAnalyzeFrameSt(es *SmplEncoderState, pcm []float32) SmplFrameParams {
 		es.hpMA, es.hpAR = SmplGetHpCoefs(smplEncHpFcornerHz)
 		es.hpSet = true
 	}
-	pcmIn := append([]float32(nil), pcm[:need]...)
-	hp := make([]float32, need)
-	SmplFiltArma2(pcmIn, need, es.hpMA, es.hpAR, &es.hpState, hp)
+	copy(es.wPcmIn, pcm[:need])
+	SmplFiltArma2(es.wPcmIn, need, es.hpMA, es.hpAR, &es.hpState, es.wHp)
 
-	x := make([]float64, SmplOrder+need)
+	// Reuse wX: zero it, copy history, then fill from hp.
+	for i := range es.wX {
+		es.wX[i] = 0
+	}
 	if len(es.hist) >= SmplOrder {
-		copy(x[:SmplOrder], es.hist[len(es.hist)-SmplOrder:])
+		copy(es.wX[:SmplOrder], es.hist[len(es.hist)-SmplOrder:])
 	}
 	for i := 0; i < need; i++ {
-		x[SmplOrder+i] = float64(hp[i]) * 32768.0
+		es.wX[SmplOrder+i] = float64(es.wHp[i]) * 32768.0
 	}
 
 	shadow := NewSmplFrameSynth()
@@ -158,62 +190,87 @@ func smplAnalyzeFrameSt(es *SmplEncoderState, pcm []float32) SmplFrameParams {
 		es.percPrev = make([]float32, smplPercRLen)
 	}
 
-	resLead := SmplOrder + smplWinnextWbLen
-	xn := make([]float32, resLead+need)
+	// Reuse wXn.
+	for i := range es.wXn {
+		es.wXn[i] = 0
+	}
 	if len(es.hist) >= resLead {
 		for i := 0; i < resLead; i++ {
-			xn[i] = float32(es.hist[len(es.hist)-resLead+i] / 32768.0)
+			es.wXn[i] = float32(es.hist[len(es.hist)-resLead+i] / 32768.0)
 		}
 	}
-	copy(xn[resLead:resLead+need], hp[:need])
+	copy(es.wXn[resLead:resLead+need], es.wHp[:need])
 
-	hpFull := make([]float32, smplLpcHistLen+need+smplWinnextWbLen)
+	// Reuse wHpFull.
+	for i := range es.wHpFull {
+		es.wHpFull[i] = 0
+	}
 	if len(es.lpcHist) == smplLpcHistLen {
-		copy(hpFull[:smplLpcHistLen], es.lpcHist)
+		copy(es.wHpFull[:smplLpcHistLen], es.lpcHist)
 	}
-	copy(hpFull[smplLpcHistLen:smplLpcHistLen+need], hp[:need])
+	copy(es.wHpFull[smplLpcHistLen:smplLpcHistLen+need], es.wHp[:need])
 
-	hpPitchHist := make([]float32, smplPitchLagMax)
+	// Reuse wHpPitch.
 	if len(es.hpPitchHist) == smplPitchLagMax {
-		copy(hpPitchHist, es.hpPitchHist)
+		copy(es.wHpPitch, es.hpPitchHist)
+	} else {
+		for i := range es.wHpPitch {
+			es.wHpPitch[i] = 0
+		}
 	}
-	es.hpPitchHist = append([]float32(nil), hp[need-smplPitchLagMax:need]...)
+	if len(es.hpPitchHist) != smplPitchLagMax {
+		es.hpPitchHist = make([]float32, smplPitchLagMax)
+	}
+	copy(es.hpPitchHist, es.wHp[need-smplPitchLagMax:need])
 
 	if len(es.ltpBuf) != MaxLTPBufLen {
 		es.ltpBuf = make([]float32, MaxLTPBufLen)
 	}
 
-	prevLsfq := append([]float32(nil), es.prevLsfq...)
+	prevLsfq := es.prevLsfq // read-only until reassigned in loop; no copy needed
 	prevVoiced := es.prevVoiced
 
 	var internal [3]SmplInternalParams
 	for f := 0; f < 3; f++ {
 		base := SmplOrder + f*SmplIntfLen
-		win := x[base-SmplOrder : base+SmplIntfLen]
+		win := es.wX[base-SmplOrder : base+SmplIntfLen]
 		nbase := resLead + f*SmplIntfLen
-		winN := xn[nbase-resLead : nbase+SmplIntfLen]
+		winN := es.wXn[nbase-resLead : nbase+SmplIntfLen]
 
 		lpcStart := smplLpcHistLen - smplLpcPre + f*SmplIntfLen
 		var lpcbuf [SmplLPCBufLen]float32
-		copy(lpcbuf[:], hpFull[lpcStart:lpcStart+SmplLPCBufLen])
+		copy(lpcbuf[:], es.wHpFull[lpcStart:lpcStart+SmplLPCBufLen])
 		windowed := smplWindowLPC20(&lpcbuf, f < 2)
 		a, f2 := smplLPCAnalyzeWithF2(&windowed)
 		nlsf := smplA2NLSF16(a[:])
 
+		if len(es.wNumSurv) != smplMaxPulsesPerSf {
+			es.wNumSurv = make([]int16, smplMaxPulsesPerSf)
+		}
+		const xsubfrLen = 2*SmplSubfrLen + 32
+		if len(es.wXsubfr) != xsubfrLen {
+			es.wXsubfr = make([]float32, xsubfrLen)
+		}
+		if len(es.wEven) != smplPercRLen {
+			es.wEven = make([]float32, smplPercRLen)
+		}
 		cs := celpFrameCtx{
 			celp:               es.celp,
 			perc:               es.perc,
 			percPrev:           &es.percPrev,
 			bitrate:            es.bitrate,
-			hpN:                hp,
+			hpN:                es.wHp,
 			intf:               f,
 			spActProb:          spActProb[f],
 			codedAsActiveVoice: codedAsActiveVoice,
 			f2:                 f2,
 			vuv:                &es.vuv,
-			hpPitchHist:        hpPitchHist,
+			hpPitchHist:        es.wHpPitch,
 			ltpBuf:             &es.ltpBuf,
 			pitchEst:           &es.pitchEst,
+			wNumSurv:           es.wNumSurv,
+			wXsubfr:            es.wXsubfr,
+			wEven:              es.wEven,
 		}
 		var feA [SmplLPCOrder + 1]float32
 		copy(feA[:], a[:])
@@ -231,8 +288,21 @@ func smplAnalyzeFrameSt(es *SmplEncoderState, pcm []float32) SmplFrameParams {
 		}
 	}
 
-	es.hist = append([]float64(nil), x[len(x)-(SmplOrder+smplWinnextWbLen):]...)
-	es.lpcHist = append([]float32(nil), hp[need-smplLpcHistLen:need]...)
+	// Save tail of wX/wHp as persistent history (small slices, unavoidable copy).
+	tailX := es.wX[len(es.wX)-(SmplOrder+smplWinnextWbLen):]
+	if cap(es.hist) >= len(tailX) {
+		es.hist = es.hist[:len(tailX)]
+		copy(es.hist, tailX)
+	} else {
+		es.hist = append([]float64(nil), tailX...)
+	}
+	tailHp := es.wHp[need-smplLpcHistLen : need]
+	if cap(es.lpcHist) >= smplLpcHistLen {
+		es.lpcHist = es.lpcHist[:smplLpcHistLen]
+		copy(es.lpcHist, tailHp)
+	} else {
+		es.lpcHist = append([]float32(nil), tailHp...)
+	}
 	es.prevLsfq = prevLsfq
 	es.prevVoiced = prevVoiced
 	return SmplFrameParams{TOC: 0x50, Config: 0, Internal: internal}
@@ -381,17 +451,16 @@ func runCelpSubframes(cs *celpFrameCtx, predcoefs *[SmplSubfrCount][17]float32, 
 			nonflatness = 0.0
 		}
 		maxPulses, importance := cs.bitrate.control(&enc, 0, boolToInt(cs.codedAsActiveVoice), cs.spActProb, nonflatness, cs.voicingStrength, voiced, wnrg, wnrgNext, 0, 320, 80)
-		numsurv := make([]int16, smplMaxPulsesPerSf)
-		for i := range numsurv {
-			numsurv[i] = 1
+		for i := range cs.wNumSurv {
+			cs.wNumSurv[i] = 1
 		}
 		totSurv := int32(1000 * (smplFcbTotSurv20msMax * smplCelpFcbSubfrlen) / (20 * 16000))
-		smplDistributeFcbSurv(numsurv, int32(maxPulses[1]), totSurv)
+		smplDistributeFcbSurv(cs.wNumSurv, int32(maxPulses[1]), totSurv)
 
 		lags := []float32{blockLags[sf][0], blockLags[sf][1], blockLags[sf][1]}
 		res := resLpc[sf*SmplSubfrLen : (sf+1)*SmplSubfrLen]
 		pc := predcoefs[sf]
-		out := cs.celp.EncodeSubframe(res, &pc, percWght[sf], lags, importance, maxPulses, numsurv)
+		out := cs.celp.EncodeSubframe(res, &pc, percWght[sf], lags, importance, maxPulses, cs.wNumSurv)
 		outs = append(outs, out)
 	}
 	return outs
@@ -407,11 +476,13 @@ func computePercCorrs(cs *celpFrameCtx) [SmplSubfrCount][]float32 {
 	for sf := 1; sf < SmplSubfrCount; sf += 2 {
 		start := cs.intf*SmplIntfLen + (sf-1)*SmplSubfrLen
 		xlen := 2*SmplSubfrLen + shorter
-		xsubfr := make([]float32, xlen)
+		xsubfr := cs.wXsubfr[:xlen]
 		for i := 0; i < xlen; i++ {
 			idx := start + i
 			if idx < len(cs.hpN) {
 				xsubfr[i] = cs.hpN[idx]
+			} else {
+				xsubfr[i] = 0
 			}
 		}
 		isLast := int32(0)
@@ -419,7 +490,7 @@ func computePercCorrs(cs *celpFrameCtx) [SmplSubfrCount][]float32 {
 			isLast = 1
 		}
 		r := SmplPercModel(cs.perc, xsubfr, xlen, frameMs, isLast, smplPercRLen)
-		even := make([]float32, smplPercRLen)
+		even := cs.wEven[:smplPercRLen]
 		for i := 0; i < smplPercRLen; i++ {
 			var prev float32
 			if i < len(*cs.percPrev) {
@@ -428,7 +499,12 @@ func computePercCorrs(cs *celpFrameCtx) [SmplSubfrCount][]float32 {
 			even[i] = 0.5 * (r[i] + prev)
 		}
 		corrs[sf-1] = even
-		*cs.percPrev = append([]float32(nil), r...)
+		if cap(*cs.percPrev) >= smplPercRLen {
+			*cs.percPrev = (*cs.percPrev)[:smplPercRLen]
+			copy(*cs.percPrev, r)
+		} else {
+			*cs.percPrev = append([]float32(nil), r...)
+		}
 		corrs[sf] = r
 	}
 	return corrs

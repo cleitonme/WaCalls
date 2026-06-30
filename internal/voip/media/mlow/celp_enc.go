@@ -552,9 +552,15 @@ type CelpEncoder struct {
 	fcbgain        float32
 	useMa9         bool
 
-	impLpcBuf []float32
-	phi       []float32
-	phiFlip   []float32
+	impLpcBuf  []float32
+	phi        []float32
+	phiFlip    []float32
+	fcbScratch *fcbSearchScratch // pre-allocated, reused per EncodeSubframe call
+	wDNew      []float32 // [smplMaxSfLen] scratch for smplFcbSearchDeldec
+	wDAbs      []float32 // [smplMaxSfLen] shared by Deldec + smplFcbSearch
+	wDSign     []float32 // [smplMaxSfLen]
+	wFcbNum    []float32 // [smplMaxSfLen] scratch for smplFcbSearch
+	wFcbDen    []float32 // [smplMaxSfLen]
 }
 
 // NewCelpEncoder builds the encoder (mirrors CelpEncoder::new).
@@ -589,9 +595,15 @@ func NewCelpEncoder(lowRate bool, percRespLen, fcbSubfrlen, subfrPerPacket int) 
 		percRespLen:    percRespLen,
 		lowRate:        lowRate,
 		useMa9:         percRespLen == 10,
-		impLpcBuf:      make([]float32, smplMaxSfLen+SmplLPCOrder),
-		phi:            make([]float32, smplMaxSfLen),
-		phiFlip:        make([]float32, 2*smplMaxSfLen),
+		impLpcBuf:  make([]float32, smplMaxSfLen+SmplLPCOrder),
+		phi:        make([]float32, smplMaxSfLen),
+		phiFlip:    make([]float32, 2*smplMaxSfLen),
+		fcbScratch: newFcbSearchScratch(),
+		wDNew:      make([]float32, smplMaxSfLen),
+		wDAbs:      make([]float32, smplMaxSfLen),
+		wDSign:     make([]float32, smplMaxSfLen),
+		wFcbNum:    make([]float32, smplMaxSfLen),
+		wFcbDen:    make([]float32, smplMaxSfLen),
 	}
 	return e
 }
@@ -615,10 +627,10 @@ func (e *CelpEncoder) smplFcbSearch(d []float32, wnrgPerPulse *[smplCelpMaxRates
 	*nPulses = [smplCelpMaxRates]int16{}
 
 	var positions [smplMaxPulsesPerSf]int32
-	dAbs := make([]float32, smplMaxSfLen)
-	dSign := make([]float32, smplMaxSfLen)
-	num := make([]float32, smplMaxSfLen)
-	den := make([]float32, smplMaxSfLen)
+	dAbs := e.wDAbs
+	dSign := e.wDSign
+	num := e.wFcbNum
+	den := e.wFcbDen
 	phi0 := e.phi[0]
 	celpCalcDAbsAndSign(d, fcbSubfrlen, dAbs, dSign)
 
@@ -737,6 +749,14 @@ func newFcbSearchScratch() *fcbSearchScratch {
 		fcbCandidates: make([]fcb, celpMaxNumsurv*celpMaxNumsurv),
 		uniqueSgntr:   make([]uint64, celpMaxNumsurv*celpMaxNumsurv),
 	}
+}
+
+func (sc *fcbSearchScratch) reset() {
+	sc.readIdx = 0
+	sc.writeIdx = 1
+	sc.fcbsSize = 0
+	sc.fcbCandidatesSize = 0
+	sc.uniqueSgntrSize = 0
 }
 
 func (sc *fcbSearchScratch) swapRw() { sc.readIdx, sc.writeIdx = sc.writeIdx, sc.readIdx }
@@ -876,11 +896,12 @@ func (e *CelpEncoder) smplFcbSearchDeldec(d []float32, pitchSharp float32, lag i
 	pulses *[smplCelpMaxRates][smplMaxPulsesPerSf]int16, nPulses *[smplCelpMaxRates]int16, wnrg, gainFromSearch, fcbWnrg *[smplCelpMaxRates]float32) {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/ed12f359a086b28e807ba236f0977af1000859fe/wacore/src/voip/mlow/smpl_celp.rs#L1247-L1494
 	fcbSubfrlen := e.fcbSubfrlen
-	sc := newFcbSearchScratch()
+	sc := e.fcbScratch
+	sc.reset()
 
-	dNew := make([]float32, smplMaxSfLen)
-	dAbs := make([]float32, smplMaxSfLen)
-	dSign := make([]float32, smplMaxSfLen)
+	dNew := e.wDNew
+	dAbs := e.wDAbs
+	dSign := e.wDSign
 	phi0 := e.phi[0]
 
 	if pitchSharp != 0.0 && lag > 0 && lag < int32(fcbSubfrlen) {

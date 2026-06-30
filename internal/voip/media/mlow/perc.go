@@ -269,6 +269,9 @@ type PercModelState struct {
 	buf      [percwNfft]float32
 	smthcoef []float32
 	windows  percWindows
+	wBufWin  [percwNfft]float32 // pre-allocated windowing buffer
+	wF       [percwNfft]float32 // pre-allocated frequency buffer
+	wFFT     fftWorkspace       // pre-allocated FFT workspace (size percwNfft)
 }
 
 // NewPercModelState builds the per-bin mel-width smoothing coefficients (smpl_create_perc_model_tables).
@@ -279,7 +282,9 @@ func NewPercModelState() *PercModelState {
 		percWidthPerBin := percMaskSmth * (fsStep*float32(i) + percMelFcHz) / fsStep
 		smthcoef[i] = percWidthPerBin / (percWidthPerBin + 1.0)
 	}
-	return &PercModelState{smthcoef: smthcoef, windows: newPercWindows()}
+	// Pre-warm twiddle cache for all sub-problem sizes of percwNfft.
+	prewarmFftTwiddles(percwNfft)
+	return &PercModelState{smthcoef: smthcoef, windows: newPercWindows(), wFFT: newFftWorkspace(percwNfft)}
 }
 
 // SmplPercModel: windowed power spectrum → bidirectional masking smooth → inverse →
@@ -293,11 +298,14 @@ func SmplPercModel(state *PercModelState, xsubfr []float32, xsubfrLen int, frame
 	winlen := winPrevPercLen + int(frameMs)*16 + win3LongLen
 	skipSamples := percwNfft - winlen
 
-	bufWin := make([]float32, percwNfft)
+	bufWin := state.wBufWin[:]
+	for i := range bufWin {
+		bufWin[i] = 0
+	}
 	smplWindowPerc(&state.windows, state.buf[skipSamples:], bufWin[skipSamples:], winlen, frameMs, isLastSubfr == 0)
 
-	f := make([]float32, percwNfft)
-	rfftForwardOrdered(bufWin, f)
+	f := state.wF[:]
+	rfftForwardOrderedW(bufWin, f, &state.wFFT)
 	f[0] = f[0] * f[0]
 	f[1] = f[1] * f[1]
 	for i := 1; i < percwNfft/2; i++ {
@@ -305,9 +313,9 @@ func SmplPercModel(state *PercModelState, xsubfr []float32, xsubfrLen int, frame
 		f[2*i+1] = 0.0
 	}
 	smthFilt(f, state.smthcoef)
-	rfftBackwardOrdered(f, bufWin)
+	rfftBackwardOrderedW(f, bufWin, &state.wFFT)
 
-	r := make([]float32, lenR)
+	r := make([]float32, lenR) // returned to caller — unavoidable alloc
 	percScaleVec(bufWin, r, lenR, 1.0/float32(percwNfft))
 	return r
 }

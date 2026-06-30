@@ -604,14 +604,26 @@ func EncodeSmplFrame(fp *SmplFrameParams, log ...zerolog.Logger) ([]byte, error)
 // MlowEncoder is the stateful top-level MLow encoder. The cross-frame analysis
 // history (SmplEncoderState, in analysis.go) persists across Encode calls.
 type MlowEncoder struct {
-	state SmplEncoderState
-	log   zerolog.Logger
+	state   SmplEncoderState
+	log     zerolog.Logger
+	clean   []float32     // reused sanitize buffer (avoid alloc per frame)
+	rangeEnc *RangeEncoder // reused range encoder (avoid alloc per frame)
+	outBuf  []byte        // reused output buffer (avoid alloc per frame)
 }
 
 // NewMlowEncoder allocates a fresh encoder.
 func NewMlowEncoder(opts ...Option) *MlowEncoder {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/ed12f359a086b28e807ba236f0977af1000859fe/wacore/src/voip/mlow/encode.rs#L33-L37
-	return &MlowEncoder{log: resolveConfig(opts).log}
+	// Pre-warm twiddle cache for all sub-problem sizes of LPC FFT.
+	prewarmFftTwiddles(SmplLPCNFFT)
+	// Pre-warm DCT tables used by smplLPCAnalyzeWithF2.
+	getDctTables()
+	return &MlowEncoder{
+		log:      resolveConfig(opts).log,
+		clean:    make([]float32, opusFrameSamps),
+		rangeEnc: NewRangeEncoder(1 + SmplEncodeBufBytes),
+		outBuf:   make([]byte, 0, 1+SmplEncodeBufBytes),
+	}
 }
 
 // Reset clears the cross-frame analysis history (call at a stream discontinuity).
@@ -629,7 +641,7 @@ func (e *MlowEncoder) Encode(pcm []float32) ([]byte, error) {
 		return nil, errors.New("mlow encode: expected 960 samples (60 ms @16 kHz)")
 	}
 	e.log.Trace().Int("samples", len(pcm)).Msg("encode frame: sanitizing and analyzing")
-	clean := make([]float32, len(pcm))
+	// Sanitize into pre-allocated buffer (avoids heap alloc per frame).
 	for i, s := range pcm {
 		switch {
 		case math.IsNaN(float64(s)):
@@ -639,8 +651,42 @@ func (e *MlowEncoder) Encode(pcm []float32) ([]byte, error) {
 		case s > 1.0:
 			s = 1.0
 		}
-		clean[i] = s
+		e.clean[i] = s
 	}
-	fp := smplAnalyzeFrameSt(&e.state, clean)
-	return EncodeSmplFrame(&fp, e.log)
+	fp := smplAnalyzeFrameSt(&e.state, e.clean)
+	return e.encodeSmplFrameReuse(&fp)
+}
+
+// encodeSmplFrameReuse is EncodeSmplFrame using pre-allocated encoder/output buffers.
+func (e *MlowEncoder) encodeSmplFrameReuse(fp *SmplFrameParams) ([]byte, error) {
+	const p2, p3, p4 = int32(320), int32(4), int32(1)
+	p6 := int32(fp.Config)
+	tbl := LoadSmplTables()
+	mem := LoadSmplMem()
+	enc := e.rangeEnc
+	enc.Reset()
+	var st SmplLsfState
+	for f := 0; f < 3; f++ {
+		ip := &fp.Internal[f]
+		encodeSmplLsf(enc, tbl, &st, fp.Config, f, &ip.Lsf)
+		encodeSmplPulses(enc, mem, p2, p3, p4, p6, ip.Lsf.Stage1, &ip.Pulses)
+		if ip.Lsf.Stage1 == 1 {
+			encodeSmplPitch(enc, mem, &st, p2, p3, p6, ip.Pulses.Subfr, &ip.Pitch)
+		} else {
+			encodeSmplGains(enc, mem, p3, ip.Pulses.Subfr, &ip.Gains)
+		}
+	}
+	enc.Done()
+	if enc.Err() != 0 {
+		return nil, errors.New("mlow encode: range-encoder buffer overflow")
+	}
+	n := enc.ConsumedLen()
+	body := enc.Bytes()
+	e.outBuf = e.outBuf[:0]
+	e.outBuf = append(e.outBuf, fp.TOC)
+	e.outBuf = append(e.outBuf, body[:n]...)
+	// Return a copy so callers can hold the slice independently of the reused buffer.
+	out := make([]byte, len(e.outBuf))
+	copy(out, e.outBuf)
+	return out, nil
 }

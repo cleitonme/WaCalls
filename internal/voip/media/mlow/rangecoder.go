@@ -322,6 +322,18 @@ func NewRangeEncoder(size int) *RangeEncoder {
 	}
 }
 
+// Reset reinitializes the encoder reusing the existing buffer allocation.
+func (e *RangeEncoder) Reset() {
+	buf := e.buf
+	storage := e.storage
+	*e = RangeEncoder{}
+	e.buf = buf
+	e.storage = storage
+	e.nbitsTotal = ecCodeBits + 1
+	e.rng = ecCodeTop
+	e.rem = -1
+}
+
 // Err returns the sticky encode error (-1 on failure).
 func (e *RangeEncoder) Err() int32 {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/674e85164b35ca19115dfebcf605708d15951ee7/wacore/src/voip/mlow/rangecoder.rs#L330-L332

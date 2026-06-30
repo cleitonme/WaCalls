@@ -1,6 +1,9 @@
 package mlow
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 const (
 	SmplLPCOrder  = 16
@@ -126,6 +129,17 @@ type dctTables struct {
 	cdif     [SmplLPCOrder / 2][nfft4]float64
 	csumdiff [SmplLPCOrder / 4][nfft4]float64
 	csumsum  [SmplLPCOrder / 4][nfft4]float64
+}
+
+var (
+	dctTablesOnce sync.Once
+	dctTablesCached dctTables
+)
+
+// getDctTables returns the singleton DCT cosine table (built once at first call).
+func getDctTables() *dctTables {
+	dctTablesOnce.Do(func() { dctTablesCached = buildDctTables() })
+	return &dctTablesCached
 }
 
 func buildDctTables() dctTables {
@@ -271,9 +285,9 @@ func smplLPCAnalyzeWithF2(windowed *[SmplLPCBufLen]float32) ([SmplLPCOrder + 1]f
 		f2d[i] = float64(f2[i])
 	}
 
-	tables := buildDctTables()
+	tables := getDctTables()
 	var r [SmplLPCOrder + 1]float64
-	bruteDct(&tables, f2d, SmplLPCOrder, r[:])
+	bruteDct(tables, f2d, SmplLPCOrder, r[:])
 
 	var rc [SmplLPCOrder]float32
 	ac2rcDbl(r[:], SmplLPCOrder, smplLPCReg, rc[:])
