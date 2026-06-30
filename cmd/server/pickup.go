@@ -1,90 +1,46 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
-
-	"wacalls/internal/voip/core"
 )
 
-// doPickup moves a held call from source_sid into the target session (sid).
+// doPickup hands an active call to a different agent within the same session.
+// The WhatsApp session (sid) is fixed — it represents the phone number/connection.
+// Multiple agents share one sid. Transfer = close agent A's WebRTC bridge so
+// agent B can open theirs via POST /webrtc on the same callID.
+//
 // Flow:
-//  1. Caller (agent B) POSTs to /api/sessions/{sid}/calls/{id}/pickup with body {"source_sid":"..."}.
-//  2. Server locates the held call in source session.
-//  3. Removes it from source registry (no hang-up), closes source WebRTC bridge.
-//  4. Adds it to target registry and rewires CallManager callbacks.
-//  5. Unholds the call (stops MOH).
-//  6. Target agent then POSTs /api/sessions/{sid}/calls/{id}/webrtc to open their audio channel.
-func (s *server) doPickup(targetSess *Session, w http.ResponseWriter, r *http.Request) {
+//  1. Agent B POSTs /api/sessions/{sid}/calls/{id}/pickup
+//  2. Server finds the call in the session registry (no session move).
+//  3. Closes the existing WebRTC bridge (disconnects agent A's audio).
+//  4. Emits call-picked-up so agent A's frontend knows it lost the call.
+//  5. Returns 200 — agent B then POSTs /api/sessions/{sid}/calls/{id}/webrtc.
+func (s *server) doPickup(sess *Session, w http.ResponseWriter, r *http.Request) {
 	callID := r.PathValue("id")
 
-	var body struct {
-		SourceSID string `json:"source_sid"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.SourceSID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source_sid required"})
-		return
-	}
-	if body.SourceSID == targetSess.id {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source_sid must differ from target session"})
-		return
-	}
-
-	sourceSess, ok := s.sessions.Get(body.SourceSID)
+	ac, ok := sess.reg.get(callID)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "source session not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "call not found in session"})
+		return
+	}
+	if ac.cm.CurrentCall() == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no active call"})
 		return
 	}
 
-	// Peek first (check state), then atomically remove.
-	peekAC, ok := sourceSess.reg.get(callID)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "call not found in source session"})
-		return
-	}
-	ci := peekAC.cm.CurrentCall()
-	if ci == nil || ci.StateData.State != core.CallStateOnHold {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "call is not on hold in source session"})
-		return
-	}
-
-	// Remove from source without ending the WhatsApp call.
-	ac, removed := sourceSess.reg.remove(callID)
-	if !removed {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "call already removed from source session"})
-		return
-	}
-
-	// Close source WebRTC bridge so audio stops flowing to source agent.
+	// Disconnect current agent's audio bridge; the new agent will attach via /webrtc.
 	if ac.bridge != nil {
-		ac.bridge.Close()
-		ac.bridge = nil
+		old, _ := sess.reg.setBridge(callID, nil)
+		if old != nil {
+			old.Close()
+		}
 	}
 
-	// Register under target session.
-	targetSess.reg.add(callID, ac)
-
-	// Rewire CallManager event callbacks so future state changes route to target.
-	targetSess.wireCall(ac.cm, callID)
-
-	// Unhold — stops MOH and resumes normal media path for the target.
-	if err := ac.cm.UnholdCall(); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "unhold failed: " + err.Error()})
-		return
-	}
-
-	// Update broker so the call record reflects the new session.
-	if rec, ok := s.broker.getCall(callID); ok {
-		rec.SessionID = targetSess.id
-		s.broker.upsertCall(*rec)
-	}
-
-	s.broker.emitCallUnheld(targetSess.id, callID)
-	s.broker.emitCallPickedUp(targetSess.id, callID, body.SourceSID)
+	s.broker.emitCallPickedUp(sess.id, callID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":        callID,
-		"state":     "active",
-		"sessionId": targetSess.id,
+		"sessionId": sess.id,
+		"state":     string(ac.cm.CurrentCall().StateData.State),
 	})
 }

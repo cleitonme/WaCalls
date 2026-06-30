@@ -225,9 +225,9 @@ func (b *Broker) emitTransferCompleted(sessionID, origID, transferID string) {
 	})
 }
 
-func (b *Broker) emitCallPickedUp(sessionID, callID, sourceSID string) {
+func (b *Broker) emitCallPickedUp(sessionID, callID string) {
 	b.broadcast(map[string]any{
-		"type": "call-picked-up", "id": callID, "sessionId": sessionID, "sourceSid": sourceSID,
+		"type": "call-picked-up", "id": callID, "sessionId": sessionID,
 	})
 }
 
