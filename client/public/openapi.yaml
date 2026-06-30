@@ -314,19 +314,21 @@ paths:
   /api/sessions/{sid}/calls/{id}/pickup:
     post:
       tags: [Chamadas]
-      summary: Transfere chamada ativa entre agentes na mesma sessão
+      summary: Transfere chamada ativa entre agentes (multiatendimento)
       description: |
-        Transferência de chamada entre agentes em plataforma multiatendimento.
+        Transferência de chamada entre agentes sem encerrar a chamada WhatsApp.
 
-        O `sid` representa a sessão WhatsApp (número/conexão) — é fixo e compartilhado
-        por todos os agentes. A chamada nunca muda de sessão.
+        O servidor resolve a sessão real da chamada via broker — o `{sid}` no path
+        pode ser qualquer sessão válida (ex: a sessão do próprio agente B).
+        A chamada **nunca muda de sessão**; apenas o bridge WebRTC é substituído.
 
         Fluxo:
 
-        1. **Agente B** chama este endpoint: `POST /api/sessions/{sid}/calls/{id}/pickup`
-        2. O servidor fecha o bridge WebRTC do Agente A (desconecta o áudio dele).
-        3. O evento SSE `call-picked-up` é emitido — Agente A sabe que perdeu a chamada.
-        4. **Agente B** abre seu canal de áudio: `POST /api/sessions/{sid}/calls/{id}/webrtc`
+        1. **Agente B** chama este endpoint: `POST /api/sessions/{qualquer-sid}/calls/{id}/pickup`
+        2. O servidor localiza a sessão real da chamada e fecha o bridge WebRTC do Agente A.
+        3. O evento SSE `call-picked-up` é emitido com o `sessionId` real da chamada.
+        4. **Agente B** conecta o áudio usando o `sessionId` retornado:
+           `POST /api/sessions/{sessionId}/calls/{id}/webrtc`
 
         Não é necessário colocar a chamada em hold antes. Funciona com chamadas ativas.
 
@@ -347,6 +349,52 @@ paths:
                   state: { type: string, example: active }
                   sessionId: { type: string }
         "404": { description: Chamada não encontrada na sessão }
+
+  /api/sessions/{sid}/calls/{id}/webrtc:
+    post:
+      tags: [Chamadas]
+      summary: Conecta canal de áudio WebRTC do agente à chamada ativa
+      description: |
+        Abre (ou substitui) o bridge WebRTC entre o browser do agente e a chamada
+        WhatsApp em curso. Se já existir um bridge ativo (outro agente conectado),
+        ele é fechado e substituído pelo novo.
+
+        Uso típico pós-pickup:
+
+        1. Agente B chama `POST /api/sessions/{sid}/calls/{id}/pickup` → recebe `sessionId`.
+        2. Agente B chama este endpoint com `sessionId` retornado no passo anterior.
+
+        O servidor responde com o SDP answer; o browser completa a negociação ICE
+        e o áudio começa a fluir.
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sdp_offer]
+              properties:
+                sdp_offer:
+                  type: string
+                  description: SDP offer gerado pelo RTCPeerConnection do browser.
+      responses:
+        "200":
+          description: Bridge WebRTC estabelecido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sdp_answer:
+                    type: string
+                    description: SDP answer para completar a negociação no browser.
+        "400": { description: sdp_offer ausente }
+        "404": { description: Chamada não encontrada na sessão }
+        "500": { description: Falha ao criar bridge WebRTC }
 
   /api/sessions/{sid}/calls/{id}/transfer:
     post:

@@ -244,7 +244,7 @@ func (s *Session) setBridge(callID string, b *Bridge) {
 		return
 	}
 	if oldB != nil {
-		oldB.Close()
+		closeBridge(oldB)
 	}
 }
 
@@ -254,8 +254,17 @@ func (s *Session) removeCall(callID string) {
 		return
 	}
 	if ac.bridge != nil {
-		ac.bridge.Close()
+		closeBridge(ac.bridge)
 	}
+}
+
+// closeBridge silently closes a Bridge without triggering OnTerminalICE.
+// Must be used whenever we intentionally tear down the browser-side WebRTC
+// (pickup, call transfer, session shutdown) to avoid the ICEConnectionStateClosed
+// callback firing terminateCall and dropping the WhatsApp call.
+func closeBridge(b *Bridge) {
+	b.OnTerminalICE = nil
+	b.Close()
 }
 
 func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
@@ -270,7 +279,7 @@ func (s *Session) teardownAllCalls() {
 	for _, ac := range s.reg.drain() {
 		_ = ac.cm.EndCall(context.Background(), core.EndCallReasonUserEnded)
 		if ac.bridge != nil {
-			ac.bridge.Close()
+			closeBridge(ac.bridge)
 		}
 	}
 }
