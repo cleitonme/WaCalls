@@ -1,7 +1,10 @@
 package call
 
 import (
+	"encoding/binary"
 	"math"
+	"os/exec"
+	"strconv"
 	"time"
 
 	"wacalls/internal/voip/core"
@@ -26,7 +29,7 @@ func (m *CallManager) HoldCall(mohURL string) error {
 
 	stop := make(chan struct{})
 	m.mohStop = stop
-	go m.runMOH(stop)
+	go m.runMOH(stop, mohURL)
 
 	return nil
 }
@@ -53,28 +56,38 @@ func (m *CallManager) UnholdCall() error {
 	return nil
 }
 
-// runMOH injects a 440 Hz hold tone into the SRTP stream every 60 ms while on hold.
-// The tone keeps the peer's media path alive and signals waiting status.
-// When a real moh_url is provided the caller may extend this to decode MP3 via
-// github.com/hajimehoshi/go-mp3 — for now the built-in tone is always used.
-func (m *CallManager) runMOH(stop <-chan struct{}) {
+// runMOH injects audio into the SRTP stream every 60 ms while on hold.
+// If mohURL is provided it decodes the MP3 via ffmpeg and loops the audio.
+// Falls back to a 440 Hz tone when ffmpeg is unavailable or mohURL is empty.
+func (m *CallManager) runMOH(stop <-chan struct{}, mohURL string) {
 	const (
 		sampleRate = 16000
 		frameSize  = 960 // 60 ms @ 16 kHz
-		toneHz     = 440.0
-		volume     = 0.25
 	)
 
-	frame := make([]float32, frameSize)
+	var pcmBuffer []float32
+	if mohURL != "" {
+		if buf, err := decodeMOHViaffmpeg(mohURL, sampleRate); err == nil && len(buf) > 0 {
+			pcmBuffer = buf
+		} else {
+			m.log.Warn("MOH: ffmpeg decode failed, falling back to tone", "url", mohURL, "err", err)
+		}
+	}
+
+	// Build tone fallback.
+	tone := make([]float32, frameSize)
 	phase := 0.0
-	delta := 2 * math.Pi * toneHz / sampleRate
-	for i := range frame {
-		frame[i] = float32(math.Sin(phase) * volume)
+	delta := 2 * math.Pi * 440.0 / sampleRate
+	for i := range tone {
+		tone[i] = float32(math.Sin(phase) * 0.25)
 		phase += delta
 		if phase >= 2*math.Pi {
 			phase -= 2 * math.Pi
 		}
 	}
+
+	bufPos := 0
+	frame := make([]float32, frameSize)
 
 	ticker := time.NewTicker(60 * time.Millisecond)
 	defer ticker.Stop()
@@ -84,6 +97,15 @@ func (m *CallManager) runMOH(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
+			if len(pcmBuffer) > 0 {
+				for i := range frame {
+					frame[i] = pcmBuffer[bufPos]
+					bufPos = (bufPos + 1) % len(pcmBuffer)
+				}
+			} else {
+				copy(frame, tone)
+			}
+
 			m.mu.Lock()
 			ready := m.onHold &&
 				m.codec != nil &&
@@ -91,7 +113,6 @@ func (m *CallManager) runMOH(stop <-chan struct{}) {
 				m.srtpSession != nil &&
 				m.relay.HasConnection()
 			if ready {
-				// Update lastCaptureAt so the silence-keepalive goroutine stays idle.
 				m.lastCaptureAt = time.Now()
 				if opus, err := m.codec.Encode(frame); err == nil {
 					m.sendOpusFrameLocked(opus)
@@ -100,4 +121,28 @@ func (m *CallManager) runMOH(stop <-chan struct{}) {
 			m.mu.Unlock()
 		}
 	}
+}
+
+// decodeMOHViaffmpeg uses ffmpeg to download and decode an MP3/audio URL to
+// raw 16 kHz mono float32 PCM. Returns error if ffmpeg is unavailable.
+func decodeMOHViaffmpeg(url string, sampleRate int) ([]float32, error) {
+	cmd := exec.Command("ffmpeg",
+		"-i", url,
+		"-f", "s16le",
+		"-ar", strconv.Itoa(sampleRate),
+		"-ac", "1",
+		"-loglevel", "quiet",
+		"pipe:1",
+	)
+	raw, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	samples := len(raw) / 2
+	pcm := make([]float32, samples)
+	for i := range pcm {
+		s := int16(binary.LittleEndian.Uint16(raw[i*2:]))
+		pcm[i] = float32(s) / 32768.0
+	}
+	return pcm, nil
 }

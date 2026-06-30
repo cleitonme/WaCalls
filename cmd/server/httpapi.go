@@ -35,6 +35,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/sessions/{sid}/calls/{id}/hold", s.handleHold)
 	mux.HandleFunc("PUT /api/sessions/{sid}/calls/{id}/unhold", s.handleUnhold)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/transfer", s.handleTransfer)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/pickup", s.handlePickup)
 	mux.HandleFunc("GET /api/sessions/{sid}/history", s.handleHistory)
 
 	mux.HandleFunc("GET /api/events", s.handleEvents)
@@ -287,6 +288,12 @@ func (s *server) handleUnhold(w http.ResponseWriter, r *http.Request) {
 	}
 	s.broker.emitCallUnheld(sess.id, callID)
 	writeJSON(w, http.StatusOK, map[string]any{"id": callID, "state": "active"})
+}
+
+func (s *server) handlePickup(w http.ResponseWriter, r *http.Request) {
+	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
+		s.doPickup(sess, w, r)
+	}
 }
 
 func (s *server) handleTransfer(w http.ResponseWriter, r *http.Request) {

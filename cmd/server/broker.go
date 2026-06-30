@@ -225,6 +225,12 @@ func (b *Broker) emitTransferCompleted(sessionID, origID, transferID string) {
 	})
 }
 
+func (b *Broker) emitCallPickedUp(sessionID, callID, sourceSID string) {
+	b.broadcast(map[string]any{
+		"type": "call-picked-up", "id": callID, "sessionId": sessionID, "sourceSid": sourceSID,
+	})
+}
+
 func (b *Broker) emitTransferFailed(sessionID, origID, transferID, reason string) {
 	b.broadcast(map[string]any{
 		"type": "transfer-failed", "sessionId": sessionID,

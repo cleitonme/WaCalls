@@ -311,6 +311,50 @@ paths:
         "404": { description: Chamada não encontrada }
         "409": { description: Chamada não está em estado held }
 
+  /api/sessions/{sid}/calls/{id}/pickup:
+    post:
+      tags: [Chamadas]
+      summary: Puxa uma chamada em hold para esta sessão (transferência assistida)
+      description: |
+        Fluxo de transferência entre agentes sem desligar a chamada do peer:
+
+        1. **Agente A** coloca a chamada em espera: `PUT /api/sessions/{sidA}/calls/{id}/hold`
+        2. **Agente B** chama este endpoint informando `source_sid` (sessão do Agente A).
+        3. O servidor move a chamada para a sessão do Agente B, fecha o canal WebRTC do Agente A e tira a chamada de espera.
+        4. **Agente B** abre seu canal de áudio: `POST /api/sessions/{sidB}/calls/{id}/webrtc`
+
+        Eventos SSE emitidos: `call-unheld` (sessionId do Agente B) e `call-picked-up`.
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/CallId" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_sid]
+              properties:
+                source_sid:
+                  type: string
+                  description: ID da sessão que atualmente detém a chamada em hold.
+                  example: "abc123"
+      responses:
+        "200":
+          description: Chamada transferida e retomada na sessão destino
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  state: { type: string, example: active }
+                  sessionId: { type: string }
+        "400": { description: source_sid ausente ou igual ao sid destino }
+        "404": { description: Sessão fonte ou chamada não encontrada }
+        "409": { description: Chamada não está em hold na sessão fonte }
+
   /api/sessions/{sid}/calls/{id}/transfer:
     post:
       tags: [Chamadas]
@@ -397,6 +441,7 @@ paths:
         | `transfer-started` | `original_call_id`, `transfer_call_id`, `sessionId` | Transferência iniciada |
         | `transfer-completed` | `original_call_id`, `transfer_call_id`, `sessionId` | Peer atendeu; chamada original encerrada |
         | `transfer-failed` | `original_call_id`, `transfer_call_id`, `sessionId`, `reason` (`rejected`\|`timeout`) | Transferência falhou; unhold automático |
+        | `call-picked-up` | `id`, `sessionId`, `sourceSid` | Chamada puxada de outra sessão via pickup |
       parameters:
         - name: clientId
           in: query

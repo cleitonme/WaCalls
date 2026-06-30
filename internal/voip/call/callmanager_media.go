@@ -45,11 +45,9 @@ func (m *CallManager) FeedCapturedPCM(data []float32) {
 		if m.encodeBufPos < frameSize {
 			break
 		}
-		frame := make([]float32, frameSize)
-		copy(frame, m.encodeBuf)
 		m.encodeBufPos = 0
 
-		opus, err := m.codec.Encode(frame)
+		opus, err := m.codec.Encode(m.encodeBuf)
 		if err != nil {
 			m.log.Debug("encode error", "err", err)
 			continue
@@ -89,7 +87,11 @@ func (m *CallManager) startSilenceKeepaliveLocked() {
 	go func() {
 		ticker := time.NewTicker(60 * time.Millisecond)
 		defer ticker.Stop()
+		// Encode silence once; resend the same bytes every tick.
+		// RTP wraps these bytes with an incrementing seq/timestamp each time,
+		// and SRTP encrypts with a new nonce, so the content stays correct.
 		silence := make([]float32, frameSize)
+		silenceFrame, _ := m.codec.Encode(silence)
 		for {
 			select {
 			case <-stop:
@@ -98,10 +100,8 @@ func (m *CallManager) startSilenceKeepaliveLocked() {
 				m.mu.Lock()
 				ready := m.codec != nil && m.rtpSession != nil && m.srtpSession != nil && m.relay.HasConnection()
 				idle := time.Since(m.lastCaptureAt) > 120*time.Millisecond
-				if ready && idle {
-					if opus, err := m.codec.Encode(silence); err == nil {
-						m.sendOpusFrameLocked(opus)
-					}
+				if ready && idle && silenceFrame != nil {
+					m.sendOpusFrameLocked(silenceFrame)
 				}
 				m.mu.Unlock()
 			}
