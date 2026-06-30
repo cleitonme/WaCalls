@@ -18,8 +18,8 @@ RUN go build -trimpath -ldflags "-s -w" -o /out/wacalls ./cmd/server
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates \
-	&& rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=server /out/wacalls ./wacalls
 COPY --from=client /src/client/dist ./client/dist
