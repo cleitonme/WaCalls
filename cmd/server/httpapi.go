@@ -26,6 +26,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{sid}", s.handleSessionDelete)
 	mux.HandleFunc("POST /api/sessions/{sid}/logout", s.handleSessionLogout)
 	mux.HandleFunc("POST /api/sessions/{sid}/pair", s.handleSessionPair)
+	mux.HandleFunc("POST /api/sessions/{sid}/import", s.handleSessionImport)
+	mux.HandleFunc("POST /api/sessions/{sid}/importRaw", s.handleSessionImportRaw)
+	mux.HandleFunc("GET /api/sessions/{sid}/export", s.handleSessionExport)
+	mux.HandleFunc("GET /api/sessions/{sid}/importStatus", s.handleSessionImportStatus)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls", s.handleStartCall)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/webrtc", s.handleWebRTC)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/accept", s.handleAccept)
@@ -187,6 +191,30 @@ func (s *server) handleSessionPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleSessionImport(w http.ResponseWriter, r *http.Request) {
+	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
+		s.doImportSession(sess, w, r)
+	}
+}
+
+func (s *server) handleSessionImportRaw(w http.ResponseWriter, r *http.Request) {
+	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
+		s.doImportRawSession(sess, w, r)
+	}
+}
+
+func (s *server) handleSessionExport(w http.ResponseWriter, r *http.Request) {
+	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
+		s.doExportSession(sess, w, r)
+	}
+}
+
+func (s *server) handleSessionImportStatus(w http.ResponseWriter, r *http.Request) {
+	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
+		s.doImportStatus(sess, w, r)
+	}
 }
 
 func (s *server) handleStartCall(w http.ResponseWriter, r *http.Request) {

@@ -212,6 +212,9 @@ func (s *Session) startPairing(ctx context.Context) error {
 				s.setAuth(AuthSnapshot{State: "open", Paired: true})
 			case "timeout":
 				s.setAuth(AuthSnapshot{State: "logged_out", Paired: false})
+			case "passkey-request":
+				s.log.Warn("WhatsApp is requiring passkey authentication for this account; passkey pairing is not supported")
+				s.setAuth(AuthSnapshot{State: "passkey_required", Paired: false})
 			}
 		}
 	}()

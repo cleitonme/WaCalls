@@ -27,6 +27,11 @@ func newSessionStore(ctx context.Context, db *sql.DB) (*sessionStore, error) {
 	return &sessionStore{db: db}, nil
 }
 
+// DB returns the underlying database handle, shared with whatsmeow's own tables.
+func (s *sessionStore) DB() *sql.DB {
+	return s.db
+}
+
 func newSessionID() string {
 	b := make([]byte, 16)
 	rand.Read(b)

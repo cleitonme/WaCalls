@@ -24,6 +24,9 @@ type SessionManager struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	order    []string
+
+	impMu   sync.Mutex
+	imports map[string]importStatus
 }
 
 func newSessionManager(ctx context.Context, container *sqlstore.Container, broker *Broker, store *sessionStore, waLogger waLog.Logger, log *slog.Logger, maxCalls int) *SessionManager {
@@ -36,7 +39,51 @@ func newSessionManager(ctx context.Context, container *sqlstore.Container, broke
 		log:       log,
 		maxCalls:  maxCalls,
 		sessions:  map[string]*Session{},
+		imports:   map[string]importStatus{},
 	}
+}
+
+func (m *SessionManager) setImportStatus(sid string, st importStatus) {
+	m.impMu.Lock()
+	m.imports[sid] = st
+	m.impMu.Unlock()
+}
+
+func (m *SessionManager) getImportStatus(sid string) (importStatus, bool) {
+	m.impMu.Lock()
+	defer m.impMu.Unlock()
+	st, ok := m.imports[sid]
+	return st, ok
+}
+
+// ImportCredentials replaces the given session's device with imported credentials,
+// writes them to whatsmeow's store, and reconnects the session under the new JID.
+func (m *SessionManager) ImportCredentials(ctx context.Context, sid string, creds *SessionCredentials) error {
+	sess, ok := m.Get(sid)
+	if !ok {
+		return fmt.Errorf("no session %s", sid)
+	}
+	jid, err := types.ParseJID(creds.JID)
+	if err != nil {
+		return fmt.Errorf("invalid jid %q: %w", creds.JID, err)
+	}
+	if err := writeSessionToWhatsmeow(m.store.DB(), jid.String(), creds, m.log); err != nil {
+		return fmt.Errorf("writing session: %w", err)
+	}
+	device, err := m.container.GetDevice(ctx, jid)
+	if err != nil || device == nil {
+		return fmt.Errorf("loading imported device: %w", err)
+	}
+	sess.replaceClient(whatsmeow.NewClient(device, m.waLogger))
+	if err := m.store.setJID(ctx, sid, jid.String()); err != nil {
+		return fmt.Errorf("updating session jid: %w", err)
+	}
+	if err := sess.connect(ctx); err != nil {
+		return fmt.Errorf("connecting imported session: %w", err)
+	}
+	m.broker.emitSessionList(m.infos())
+	m.log.Info("session imported", "session", sid, "jid", jid.String())
+	return nil
 }
 
 func (m *SessionManager) register(s *Session) {

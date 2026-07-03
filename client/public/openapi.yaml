@@ -58,7 +58,7 @@ components:
         id: { type: string, example: 6458cca60a17c0cefa71de9da9dc92a2 }
         name: { type: string, example: WhatsApp }
         jid: { type: string, example: "556192264108:13@s.whatsapp.net" }
-        state: { type: string, enum: [open, connecting, close], example: open }
+        state: { type: string, enum: [connecting, qr, open, logged_out, passkey_required], example: open }
         paired: { type: boolean, example: true }
     StartCallRequest:
       type: object
@@ -149,6 +149,101 @@ paths:
         - { $ref: "#/components/parameters/ClientId" }
       responses:
         "204": { description: Desconectada }
+
+  /api/sessions/{sid}/import:
+    post:
+      tags: [Sessões]
+      summary: Importa uma sessão a partir de um arquivo (wa-web dump, Baileys creds.json ou .zip)
+      description: |
+        multipart/form-data com o campo `file`. Substitui o device da sessão pelo importado
+        e inicia a conexão; acompanhe via `/api/sessions/{sid}/importStatus` ou o evento `auth-state`.
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Importada; conexão iniciada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jid: { type: string }
+                  message: { type: string }
+        "400": { description: Arquivo/formato inválido ou credenciais incompletas }
+        "409": { description: Já existe uma importação em andamento para esta sessão }
+
+  /api/sessions/{sid}/importRaw:
+    post:
+      tags: [Sessões]
+      summary: Importa uma sessão a partir de JSON bruto (wa-web dump ou `{ creds, keys }` no formato Baileys)
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                creds: { type: object }
+                keys: { type: object }
+      responses:
+        "200":
+          description: Importada; conexão iniciada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jid: { type: string }
+                  message: { type: string }
+        "400": { description: JSON/formato inválido ou credenciais incompletas }
+        "409": { description: Já existe uma importação em andamento para esta sessão }
+
+  /api/sessions/{sid}/export:
+    get:
+      tags: [Sessões]
+      summary: Exporta as credenciais da sessão pareada (formato Baileys creds.json)
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+        - name: format
+          in: query
+          schema: { type: string, enum: [json, zip], default: json }
+      responses:
+        "200": { description: "Download: creds.json ou session-{sid}.zip" }
+        "400": { description: Sessão sem JID (não pareada) }
+        "404": { description: Device não encontrado no banco }
+
+  /api/sessions/{sid}/importStatus:
+    get:
+      tags: [Sessões]
+      summary: Status da última importação e da conexão da sessão
+      parameters:
+        - { $ref: "#/components/parameters/Sid" }
+        - { $ref: "#/components/parameters/ClientId" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jid: { type: string }
+                  connectionStatus: { type: string, enum: [disconnected, connecting, connected] }
+                  importStatus: { type: string, enum: [importing, connecting, error] }
+                  importMessage: { type: string }
 
   /api/sessions/{sid}/calls:
     get:
@@ -472,6 +567,10 @@ paths:
       description: |
         Server-Sent Events. Tipos existentes: `session-list`, `session-qr`, `auth-state`,
         `call-list`, `call-status`, `call-ended`, `incoming`, `incoming-claimed`.
+
+        `auth-state` pode trazer `state: "passkey_required"` quando a WhatsApp exige
+        autenticação via passkey para a conta — pareamento por QR code não é suportado
+        nesse caso.
 
         Tipos adicionados pelo sistema de hold/transferência:
 
