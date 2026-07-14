@@ -64,6 +64,7 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 	}
 	cm.OnStateChange = func(c *call.CallInfo) {
 		if c.IsEnded() {
+			s.log.Info("call ended", "call_id", c.CallID, "reason", string(c.StateData.EndReason))
 			s.removeCall(c.CallID)
 			// Only end the broker record if this session owns it. Sibling sessions
 			// for the same number may terminate with accepted_elsewhere while the
@@ -91,6 +92,7 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		s.mgr.broker.upsertCall(rec)
 	}
 	cm.OnEnded = func(c *call.CallInfo) {
+		s.log.Info("call ended", "call_id", c.CallID, "reason", string(c.StateData.EndReason))
 		s.removeCall(c.CallID)
 		if rec, ok := s.mgr.broker.getCall(c.CallID); !ok || rec.SessionID == s.id {
 			s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))

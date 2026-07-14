@@ -62,6 +62,19 @@ func (r *callRegistry) setBridge(callID string, b *Bridge) (*Bridge, bool) {
 	return oldB, true
 }
 
+// disableTerminalICE silences the current bridge's OnTerminalICE hook without
+// closing it. Used when a call goes on hold for a pickup/transfer handoff:
+// the call's survival no longer depends on this bridge, so a flaky ICE
+// connection on the outgoing agent's side must not be allowed to end the
+// real call while the handoff is in flight.
+func (r *callRegistry) disableTerminalICE(callID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ac, ok := r.calls[callID]; ok && ac.bridge != nil {
+		ac.bridge.OnTerminalICE = nil
+	}
+}
+
 func (r *callRegistry) drain() []*activeCall {
 	r.mu.Lock()
 	defer r.mu.Unlock()

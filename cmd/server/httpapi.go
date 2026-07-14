@@ -376,8 +376,10 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 
 func (s *server) doWebRTC(sess *Session, w http.ResponseWriter, r *http.Request) {
 	callID := r.PathValue("id")
+	s.log.Info("webrtc requested", "session", sess.id, "call_id", callID)
 	ac, ok := sess.reg.get(callID)
 	if !ok {
+		s.log.Info("webrtc 404: call not in registry", "session", sess.id, "call_id", callID)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
 		return
 	}
@@ -398,9 +400,23 @@ func (s *server) doWebRTC(sess *Session, w http.ResponseWriter, r *http.Request)
 		ac.cm.FeedCapturedPCM(pcm)
 	}
 	bridge.OnTerminalICE = func() {
+		s.log.Info("browser bridge ICE terminal — ending call", "session", sess.id, "call_id", callID)
 		go sess.terminateCall(callID, core.EndCallReasonUserEnded)
 	}
 	sess.setBridge(callID, bridge)
+
+	// If this webrtc completes a pickup/transfer handoff, the call was parked
+	// on hold (MOH) so it survives regardless of the old agent's browser.
+	// Now that the new agent's bridge is confirmed in place, resume real audio.
+	if ci := ac.cm.CurrentCall(); ci != nil && ci.StateData.State == core.CallStateOnHold {
+		if err := ac.cm.UnholdCall(); err != nil {
+			s.log.Warn("webrtc: auto-unhold failed", "session", sess.id, "call_id", callID, "err", err)
+		} else {
+			s.log.Info("webrtc: call auto-resumed from hold", "session", sess.id, "call_id", callID)
+			s.broker.emitCallUnheld(sess.id, callID)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"sdp_answer": answer})
 }
 
@@ -440,6 +456,7 @@ func (s *server) doReject(sess *Session, w http.ResponseWriter, r *http.Request)
 
 func (s *server) doEndCall(sess *Session, w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	s.log.Info("hangup requested (DELETE)", "session", sess.id, "call_id", id)
 	if ac, ok := sess.reg.get(id); ok {
 		_ = ac.cm.EndCall(r.Context(), core.EndCallReasonUserEnded)
 	}
