@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"time"
@@ -43,6 +44,15 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{sid}/history", s.handleHistory)
 
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+
+	// Profiling (protegido pela mesma API key; aceita ?apiKey= para uso com go tool pprof).
+	// Ex.: GET /api/debug/pprof/profile?seconds=30 — CPU profile de 30s.
+	// O Index precisa do StripPrefix para resolver os perfis nomeados (heap, goroutine, ...).
+	mux.Handle("GET /api/debug/pprof/", http.StripPrefix("/api", http.HandlerFunc(pprof.Index)))
+	mux.HandleFunc("GET /api/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /api/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("GET /api/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("GET /api/debug/pprof/trace", pprof.Trace)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
