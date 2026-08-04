@@ -11,6 +11,7 @@ import (
 	"wacalls/internal/voip/transport"
 	"wacalls/internal/voip/wanode"
 
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -39,8 +40,27 @@ type CallManager struct {
 	encodeBuf    []float32
 	encodeBufPos int
 
+	captureBuf  []float32
+	sendLoopStop chan struct{}
+
 	lastCaptureAt time.Time
 	keepaliveStop chan struct{}
+
+	jitter    *media.JitterBuffer
+	lastFrame []float32
+	concealed int
+
+	recvStats    *media.RTCPReceiverStats
+	rtcpTxStop   chan struct{}
+	rtcpCName    string
+	rtpPacketsSent uint32
+	rtpOctetsSent  uint32
+	lastRtpTs      uint32
+
+	timeouts     Timeouts
+	watchdogTick time.Duration
+	watchdogStop chan struct{}
+	lastMediaRecv time.Time
 
 	onHold  bool
 	mohStop chan struct{}
@@ -56,9 +76,11 @@ func NewCallManager(sock core.VoipSocket, log *slog.Logger) *CallManager {
 		log = slog.Default()
 	}
 	m := &CallManager{
-		sock:        sock,
-		log:         log,
-		debeEnabled: true,
+		sock:         sock,
+		log:          log,
+		debeEnabled:  true,
+		timeouts:     DefaultTimeouts,
+		watchdogTick: defaultWatchdogTick,
 	}
 	relay := transport.NewSctpRelayManager(log)
 	relay.SetOnConnected(func(ip string, port int) { m.onRelayConnected() })
@@ -125,9 +147,14 @@ func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid type
 	m.mu.Unlock()
 
 	if ackNode != nil {
-		go m.HandleCallAck(context.Background(), ackNode)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 10*time.Second)
+		go func() {
+			defer cancel()
+			m.HandleCallAck(ctx, ackNode)
+		}()
 	}
 
+	m.startWatchdog()
 	m.log.Info("call offer sent", "call_id", callID, "peer", resolved.String())
 	return nil
 }
@@ -167,6 +194,7 @@ func (m *CallManager) AcceptCall(ctx context.Context, callID string) error {
 	} else {
 		m.log.Warn("call accepted but no relay endpoints yet; media path waits for a transport message", "call_id", callID)
 	}
+	m.startWatchdog()
 	m.log.Info("call accepted", "call_id", callID)
 	return nil
 }
@@ -202,7 +230,7 @@ func (m *CallManager) RejectCall(ctx context.Context, callID string, reason core
 	m.emitState()
 	m.mu.Unlock()
 
-	go func() { _, _ = m.sock.Query(ctx, node) }()
+	m.sendSignaling(node)
 	m.cleanupMedia()
 	return nil
 }
@@ -220,12 +248,29 @@ func (m *CallManager) EndCall(ctx context.Context, reason core.EndCallReason) er
 	m.emitState()
 	m.mu.Unlock()
 
-	go func() { _, _ = m.sock.Query(ctx, node) }()
+	m.sendSignaling(node)
 	if m.OnEnded != nil {
 		m.OnEnded(ended)
 	}
-	m.cleanupMedia()
+	if ended.StateData.ConnectedAt != nil {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			m.cleanupMedia()
+		}()
+	} else {
+		m.cleanupMedia()
+	}
 	return nil
+}
+
+// sendSignaling sends a signaling node with a bounded 10 s timeout so that a
+// hung socket cannot leak the goroutine forever.
+func (m *CallManager) sendSignaling(node waBinary.Node) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 10*time.Second)
+	go func() {
+		defer cancel()
+		_, _ = m.sock.Query(ctx, node)
+	}()
 }
 
 func (m *CallManager) ownCredJid() string {

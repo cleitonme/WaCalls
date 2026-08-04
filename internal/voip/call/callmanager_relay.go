@@ -1,6 +1,7 @@
 package call
 
 import (
+	"time"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/transport"
 )
@@ -26,7 +27,9 @@ func (m *CallManager) onRelayConnected() {
 	if call != nil && call.StateData.State == core.CallStateConnecting {
 		if err := call.ApplyTransition(Transition{Type: TransitionMediaConnected}); err == nil {
 			m.emitState()
+			m.startSendLoopLocked()
 			m.startSilenceKeepaliveLocked()
+			m.startRtcpTxLocked()
 			m.log.Info("relay connected → active", "call_id", call.CallID)
 		}
 	}
@@ -53,7 +56,7 @@ func buildRelayConfigs(endpoints []core.RelayEndpoint) []transport.RelayConfig {
 			name = ep.IP
 		}
 		relays = append(relays, transport.RelayConfig{
-			IP: ep.IP, Port: 3478, Token: ep.Token, AuthToken: ep.AuthToken,
+			IP: ep.IP, Port: ep.Port, Token: ep.Token, AuthToken: ep.AuthToken,
 			RawAuthToken: ep.RawAuthToken, RawToken: ep.RawToken, Key: ep.Key,
 			RelayID: ep.RelayID, Name: name, AuthTokenID: ep.AuthTokenID,
 		})
@@ -83,6 +86,23 @@ func (m *CallManager) cleanupMedia() {
 		close(m.keepaliveStop)
 		m.keepaliveStop = nil
 	}
+	if m.sendLoopStop != nil {
+		close(m.sendLoopStop)
+		m.sendLoopStop = nil
+	}
+	if m.rtcpTxStop != nil {
+		close(m.rtcpTxStop)
+		m.rtcpTxStop = nil
+	}
+	if m.watchdogStop != nil {
+		close(m.watchdogStop)
+		m.watchdogStop = nil
+	}
+	if m.mohStop != nil {
+		close(m.mohStop)
+		m.mohStop = nil
+	}
+	m.onHold = false
 	m.rtpSession = nil
 	m.srtpSession = nil
 	m.firstPacketSent = false
@@ -91,6 +111,15 @@ func (m *CallManager) cleanupMedia() {
 	m.actualPeerSet = false
 	m.encodeBuf = nil
 	m.encodeBufPos = 0
+	m.captureBuf = nil
+	m.jitter = nil
+	m.lastFrame = nil
+	m.concealed = 0
+	m.recvStats = nil
+	m.rtpPacketsSent = 0
+	m.rtpOctetsSent = 0
+	m.lastRtpTs = 0
+	m.lastMediaRecv = time.Time{}
 	m.mu.Unlock()
 
 	m.relay.Cleanup()

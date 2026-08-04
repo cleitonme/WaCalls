@@ -1,5 +1,15 @@
 package core
 
+// AudioCodec is the interface for audio encode/decode codecs.
+// It mirrors media.Codec so callers can depend on core without importing media.
+type AudioCodec interface {
+	Encode(pcm []float32) ([]byte, error)
+	Decode(frame []byte) ([]float32, error)
+	FrameSize() int
+	SampleRate() int
+	Close()
+}
+
 type CallState string
 
 const (

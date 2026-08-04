@@ -14,6 +14,7 @@ import (
 const (
 	relayConnectionTimeout = 20 * time.Second
 	relayKeepaliveInterval = 1100 * time.Millisecond
+	maxDialRelays          = 3
 )
 
 type relayConnState int
@@ -47,6 +48,7 @@ type relayConnection struct {
 	localUfrag string
 	keepalive  *time.Ticker
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 }
 
 type SctpRelayManager struct {
@@ -103,6 +105,9 @@ func connID(ip string, port int, authTokenID string) string {
 }
 
 func (m *SctpRelayManager) ConfigureRelays(relays []RelayConfig) {
+	if len(relays) > maxDialRelays {
+		relays = relays[:maxDialRelays]
+	}
 	var wg sync.WaitGroup
 	for _, r := range relays {
 		port := r.Port
@@ -403,11 +408,7 @@ func (m *SctpRelayManager) closeConnection(id string) {
 }
 
 func (m *SctpRelayManager) teardown(conn *relayConnection) {
-	select {
-	case <-conn.stopCh:
-	default:
-		close(conn.stopCh)
-	}
+	conn.stopOnce.Do(func() { close(conn.stopCh) })
 	if conn.keepalive != nil {
 		conn.keepalive.Stop()
 	}

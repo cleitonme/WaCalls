@@ -36,7 +36,6 @@ func DepackSplitRed(p []byte, log ...zerolog.Logger) ([]MlowFrame, error) {
 		lg.Debug().Msg("red depack: empty packet")
 		return nil, ErrPktSizeZero
 	}
-	lg.Trace().Int("packet_bytes", n).Msg("red depack")
 	type redBlock struct {
 		code uint8
 		size uint8
@@ -78,6 +77,5 @@ func DepackSplitRed(p []byte, log ...zerolog.Logger) ([]MlowFrame, error) {
 	}
 	mainSize := rem - 1 // total - header_size - sum(redundant sizes)
 	frames = append(frames, MlowFrame{Data: p[cur : cur+mainSize], TimeCode: mainCode, IsMain: true})
-	lg.Trace().Int("redundant_blocks", len(red)).Int("main_bytes", mainSize).Int("total_frames", len(frames)).Msg("red depack: done")
 	return frames, nil
 }

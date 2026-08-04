@@ -570,15 +570,12 @@ func EncodeSmplFrame(fp *SmplFrameParams, log ...zerolog.Logger) ([]byte, error)
 	lg := pickLog(log)
 	const p2, p3, p4 = int32(320), int32(4), int32(1)
 	p6 := int32(fp.Config)
-	lg.Trace().Uint8("toc_byte", fp.TOC).Int("config", fp.Config).Int("internal_frames", 3).Msg("encode frame")
 	tbl := LoadSmplTables()
 	mem := LoadSmplMem()
 	enc := NewRangeEncoder(1 + SmplEncodeBufBytes)
 	var st SmplLsfState
 	for f := 0; f < 3; f++ {
 		ip := &fp.Internal[f]
-		lg.Trace().Int("intf", f).Bool("voiced", ip.Lsf.Stage1 == 1).Int32("stage1", ip.Lsf.Stage1).
-			Int32("total_pulses", ip.Pulses.Total).Bool("has_pitch", ip.HasPitch).Msg("encode internal frame params")
 		encodeSmplLsf(enc, tbl, &st, fp.Config, f, &ip.Lsf)
 		encodeSmplPulses(enc, mem, p2, p3, p4, p6, ip.Lsf.Stage1, &ip.Pulses)
 		if ip.Lsf.Stage1 == 1 {
@@ -597,7 +594,6 @@ func EncodeSmplFrame(fp *SmplFrameParams, log ...zerolog.Logger) ([]byte, error)
 	out := make([]byte, 0, 1+n)
 	out = append(out, fp.TOC)
 	out = append(out, body[:n]...)
-	lg.Trace().Int("frame_bytes", len(out)).Int("body_bytes", n).Msg("encode frame: done")
 	return out, nil
 }
 
@@ -640,7 +636,6 @@ func (e *MlowEncoder) Encode(pcm []float32) ([]byte, error) {
 		e.log.Debug().Int("samples", len(pcm)).Int("want", opusFrameSamps).Msg("encode: wrong frame size")
 		return nil, errors.New("mlow encode: expected 960 samples (60 ms @16 kHz)")
 	}
-	e.log.Trace().Int("samples", len(pcm)).Msg("encode frame: sanitizing and analyzing")
 	// Sanitize into pre-allocated buffer (avoids heap alloc per frame).
 	for i, s := range pcm {
 		switch {

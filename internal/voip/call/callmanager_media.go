@@ -11,49 +11,78 @@ func (m *CallManager) initCodec() {
 	if m.codec != nil {
 		return
 	}
-	codec, err := media.NewMLowCodec(media.DefaultCodecOptions)
+	codec, mode, err := media.NewCodecWithNative(media.DefaultCodecOptions)
 	if err != nil {
 		m.log.Warn("MLow codec unavailable — call will run signaling-only (no audio)", "err", err)
 		return
 	}
 	m.codec = codec
+	m.jitter = media.NewJitterBuffer(3)
+	m.recvStats = media.NewRTCPReceiverStats(16000)
+	m.rtcpCName = "wacalls@" + m.ownCredJid()
+	m.log.Info("codec initialized", "mode", mode)
 }
 
 func (m *CallManager) FeedCapturedPCM(data []float32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.onHold {
-		return
-	}
-	if m.codec == nil || m.rtpSession == nil || m.srtpSession == nil || !m.relay.HasConnection() {
+	if m.onHold || m.codec == nil || len(data) == 0 {
 		return
 	}
 	m.lastCaptureAt = time.Now()
+	m.captureBuf = append(m.captureBuf, data...)
+	if maxBuf := m.codec.FrameSize() * 4; len(m.captureBuf) > maxBuf {
+		m.captureBuf = m.captureBuf[len(m.captureBuf)-maxBuf:]
+	}
+}
+
+func (m *CallManager) startSendLoopLocked() {
+	if m.sendLoopStop != nil || m.codec == nil {
+		return
+	}
+	stop := make(chan struct{})
+	m.sendLoopStop = stop
 	frameSize := m.codec.FrameSize()
-	if m.encodeBuf == nil {
-		m.encodeBuf = make([]float32, frameSize)
-		m.encodeBufPos = 0
-	}
+	go func() {
+		ticker := time.NewTicker(60 * time.Millisecond)
+		defer ticker.Stop()
+		silence := make([]float32, frameSize)
+		voiced := make([]float32, frameSize)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+			m.mu.Lock()
+			if m.codec == nil || m.rtpSession == nil || m.srtpSession == nil || !m.relay.HasConnection() {
+				m.mu.Unlock()
+				continue
+			}
+			frame := silence
+			if len(m.captureBuf) >= frameSize {
+				copy(voiced, m.captureBuf[:frameSize])
+				frame = voiced
+				m.captureBuf = m.captureBuf[frameSize:]
+			}
+			codec := m.codec
+			onHold := m.onHold
+			m.mu.Unlock()
 
-	offset := 0
-	for offset < len(data) {
-		toCopy := min(len(data)-offset, frameSize-m.encodeBufPos)
-		copy(m.encodeBuf[m.encodeBufPos:], data[offset:offset+toCopy])
-		m.encodeBufPos += toCopy
-		offset += toCopy
-		if m.encodeBufPos < frameSize {
-			break
+			if onHold {
+				continue
+			}
+			opus, err := codec.Encode(frame)
+			if err != nil {
+				m.log.Debug("encode error", "err", err)
+				continue
+			}
+			m.mu.Lock()
+			m.sendOpusFrameLocked(opus)
+			m.mu.Unlock()
 		}
-		m.encodeBufPos = 0
-
-		opus, err := m.codec.Encode(m.encodeBuf)
-		if err != nil {
-			m.log.Debug("encode error", "err", err)
-			continue
-		}
-		m.sendOpusFrameLocked(opus)
-	}
+	}()
 }
 
 func (m *CallManager) sendOpusFrameLocked(opus []byte) {
@@ -68,6 +97,9 @@ func (m *CallManager) sendOpusFrameLocked(opus []byte) {
 		pkt.Header.ExtensionData = nil
 	}
 	m.firstPacketSent = true
+	m.rtpPacketsSent++
+	m.rtpOctetsSent += uint32(len(pkt.Payload))
+	m.lastRtpTs = pkt.Header.Timestamp
 
 	srtp, err := m.srtpSession.Protect(pkt)
 	if err != nil {
@@ -87,9 +119,6 @@ func (m *CallManager) startSilenceKeepaliveLocked() {
 	go func() {
 		ticker := time.NewTicker(60 * time.Millisecond)
 		defer ticker.Stop()
-		// Encode silence once; resend the same bytes every tick.
-		// RTP wraps these bytes with an incrementing seq/timestamp each time,
-		// and SRTP encrypts with a new nonce, so the content stays correct.
 		silence := make([]float32, frameSize)
 		silenceFrame, _ := m.codec.Encode(silence)
 		for {
@@ -111,6 +140,10 @@ func (m *CallManager) startSilenceKeepaliveLocked() {
 
 func (m *CallManager) onRelayData(data []byte) {
 	if transport.IsStunPacket(data) {
+		return
+	}
+	if transport.IsRtcpPacket(data) {
+		m.handleRtcp(data)
 		return
 	}
 	if !transport.IsRtpPacket(data) {
@@ -144,6 +177,9 @@ func (m *CallManager) onRelayData(data []byte) {
 	}
 	srtp := m.srtpSession
 	codec := m.codec
+	jitter := m.jitter
+	recvStats := m.recvStats
+	selfSsrc := m.selfSsrc
 	m.mu.Unlock()
 
 	pkt, err := srtp.Unprotect(data)
@@ -154,12 +190,59 @@ func (m *CallManager) onRelayData(data []byte) {
 	if len(pkt.Payload) == 0 {
 		return
 	}
-	pcm, err := codec.Decode(pkt.Payload)
-	if err != nil {
-		return
+
+	if recvStats != nil {
+		recvStats.NoteRTP(pkt.Header.SequenceNumber, pkt.Header.Timestamp, uint64(time.Now().UnixMilli()))
 	}
-	pcm = media.NormalizeFrame(pcm, codec.FrameSize())
-	if m.OnPeerAudio != nil {
-		m.OnPeerAudio(pcm)
+
+	m.mu.Lock()
+	m.lastMediaRecv = time.Now()
+	m.mu.Unlock()
+
+	frames := jitter.Push(pkt.Header.SequenceNumber, pkt.Payload)
+
+	m.mu.Lock()
+	cb := m.OnPeerAudio
+	var out [][]float32
+	for _, fr := range frames {
+		if fr.Present {
+			pcm, err := codec.Decode(fr.Payload)
+			if err != nil || len(pcm) == 0 {
+				m.log.Debug("decode error", "err", err, "payload_len", len(fr.Payload))
+				continue
+			}
+			m.lastFrame = pcm
+			m.concealed = 0
+			out = append(out, media.NormalizeFrame(pcm, codec.FrameSize()))
+		} else {
+			concealed := m.concealLocked()
+			if concealed != nil {
+				out = append(out, concealed)
+			}
+		}
 	}
+	_ = selfSsrc
+	m.mu.Unlock()
+
+	if cb != nil {
+		for _, pcm := range out {
+			cb(pcm)
+		}
+	}
+}
+
+func (m *CallManager) concealLocked() []float32 {
+	n := m.codec.FrameSize()
+	if len(m.lastFrame) > 0 {
+		n = len(m.lastFrame)
+	}
+	pcm := make([]float32, n)
+	if m.concealed == 0 && len(m.lastFrame) > 1 {
+		last := len(pcm) - 1
+		for i := range pcm {
+			pcm[i] = m.lastFrame[i] * (1 - float32(i)/float32(last))
+		}
+	}
+	m.concealed++
+	return pcm
 }

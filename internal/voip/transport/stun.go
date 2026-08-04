@@ -169,11 +169,20 @@ func IsStunPacket(data []byte) bool {
 	return data[0]&0xc0 == 0
 }
 
+func inRtcpTypeRange(b byte) bool { return b >= 192 && b <= 223 }
+
 func IsRtpPacket(data []byte) bool {
 	if len(data) < 2 {
 		return false
 	}
-	return data[0]&0xc0 == 0x80
+	return data[0]&0xc0 == 0x80 && !inRtcpTypeRange(data[1])
+}
+
+func IsRtcpPacket(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+	return data[0]&0xc0 != 0 && inRtcpTypeRange(data[1])
 }
 
 type StunAttribute struct {

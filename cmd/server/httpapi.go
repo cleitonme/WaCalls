@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,18 @@ func (s *server) routes() http.Handler {
 		log.Printf("WACALLS_API_KEY not set, generated key: %s", key)
 	}
 	handler = withAuth(handler, key)
+
+	var limiter *ipRateLimiter
+	if v := os.Getenv("WACALLS_RATE_LIMIT"); v != "" {
+		if rps, err := strconv.ParseFloat(v, 64); err == nil && rps > 0 {
+			limiter = newIPRateLimiter(rps)
+			stopJanitor := make(chan struct{})
+			go limiter.janitor(stopJanitor)
+			log.Printf("rate limit enabled: %.1f req/s per IP", rps)
+		}
+	}
+	handler = withRateLimit(handler, limiter)
+
 	return withCORS(handler)
 }
 

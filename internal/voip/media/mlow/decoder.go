@@ -61,10 +61,8 @@ func (d *MlowDecoder) Reset() {
 func (d *MlowDecoder) Decode(payload []byte) []float32 {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/ed12f359a086b28e807ba236f0977af1000859fe/wacore/src/voip/mlow/decoder.rs#L54-L72
 	if len(payload) == 0 {
-		d.log.Trace().Msg("decode: empty payload, emitting silence")
 		return make([]float32, opusFrameSamps)
 	}
-	d.log.Trace().Int("payload_bytes", len(payload)).Int32("redundancy", d.redundancy).Msg("decode packet")
 	if d.redundancy > 0 {
 		frames, err := DepackSplitRed(payload, d.log)
 		if err != nil {
@@ -75,7 +73,6 @@ func (d *MlowDecoder) Decode(payload []byte) []float32 {
 		if len(frames) > 0 {
 			main = frames[len(frames)-1].Data // the main (current) frame is last
 		}
-		d.log.Trace().Int("red_frames", len(frames)).Int("main_bytes", len(main)).Msg("decode: RED depacked")
 		return d.decodeFrame(main)
 	}
 	return d.decodeFrame(payload)
@@ -84,7 +81,6 @@ func (d *MlowDecoder) Decode(payload []byte) []float32 {
 func (d *MlowDecoder) decodeFrame(frame []byte) []float32 {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/ed12f359a086b28e807ba236f0977af1000859fe/wacore/src/voip/mlow/decoder.rs#L74-L99
 	if len(frame) == 0 {
-		d.log.Trace().Msg("decode frame: empty, emitting silence")
 		return make([]float32, opusFrameSamps)
 	}
 	toc := ParseSmplTOC(frame[0], d.log)
@@ -94,16 +90,16 @@ func (d *MlowDecoder) decodeFrame(frame []byte) []float32 {
 	} else {
 		outLen = toc.SampleRate / 1000 * toc.FrameMs
 	}
-	d.log.Trace().Int("frame_bytes", len(frame)).Uint8("toc_byte", frame[0]).
-		Bool("std_opus", toc.StdOpus).Bool("sid", toc.SID).Bool("active", toc.Active).
-		Bool("voiced", toc.Voiced).Int("frame_ms", toc.FrameMs).Int("sample_rate", toc.SampleRate).
-		Int("out_len", outLen).Msg("decode frame")
 	if toc.StdOpus {
 		d.log.Debug().Msg("decode frame: standard-Opus packet, not handled, emitting silence")
 		return make([]float32, outLen)
 	}
-	if toc.SID || !toc.Active {
-		d.log.Trace().Bool("sid", toc.SID).Bool("active", toc.Active).Msg("decode frame: inactive/SID, emitting silence")
+	// NOTE: we deliberately do NOT gate on toc.SID (bit 7). With DTX/SID enabled,
+	// the peer sets bit 7 on EVERY frame as a stream-level flag, including real
+	// active audio (e.g. TOC 0x92, vad/bit1 set, 200+ byte payloads). The true
+	// silence indicator is !Active (vad==0 && bit1==0). We also reject frames
+	// that are not 16 kHz 60 ms SMPL to avoid decoding wrong-format packets.
+	if !toc.Active || toc.SampleRate != 16000 || toc.FrameMs != 60 {
 		return make([]float32, outLen)
 	}
 	return d.decodeActiveFrame(frame, outLen, d.outBuf[:0], d.lagsBuf[:0])
@@ -154,10 +150,6 @@ func (d *MlowDecoder) decodeActiveFrame(frame []byte, outLen int, out, packetLag
 		packetLags = append(packetLags, params.BlockLags[:]...)
 		avgNormBr += SmplGetNormalizedBitrate(params.TotalPulses, SmplIntfLen)
 
-		d.log.Trace().Int("intf", f).Bool("voiced", voiced).Int32("stage1", lsf.Stage1).
-			Int32("grid", lsf.Grid).Int32("total_pulses", total).Int("nlsf_len", len(d.state.PrevNLSF)).
-			Msg("decode internal frame params")
-
 		nlsf := SmplReconstructNLSF(synthT, int(lsf.Stage1), config, int(lsf.Grid), &lsf.Stage2, d.state.PrevNLSF)
 		var sig [SmplIntfLen]float32
 		d.state.Celp.SynthFrame(nlsf, int(lsf.Extra), pulses.Pulses, &params, lowRate, SmplIntfLen, sig[:])
@@ -167,7 +159,6 @@ func (d *MlowDecoder) decodeActiveFrame(frame []byte, outLen int, out, packetLag
 
 	// Per-packet harmonic postfilter (final pitch comb + 48-sample group delay) over the whole packet.
 	plen := len(out)
-	d.log.Trace().Int("samples", plen).Int("packet_lags", len(packetLags)).Msg("decode active frame: applying harmonic postfilter")
 	SmplHarmPostfilter(d.state.Harm, out, plen, packetLags, len(packetLags), avgNormBr/3.0)
 
 	pcm := make([]float32, len(out))
