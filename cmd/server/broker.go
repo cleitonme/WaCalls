@@ -38,8 +38,9 @@ type SessionInfo struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	JID    string `json:"jid"`
-	State  string `json:"state"`
-	Paired bool   `json:"paired"`
+	State  string     `json:"state"`
+	Paired bool       `json:"paired"`
+	Proxy  *ProxyInfo `json:"proxy,omitempty"`
 }
 
 type subscriber struct {

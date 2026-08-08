@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { logoutSession, pairSession } from "@/services/sessions";
+import { ProxyDialog } from "./ProxyDialog";
 import type { SessionInfo, SessionState } from "@/types/session";
 
 const statusLabel: Record<SessionState, string> = {
@@ -41,6 +42,7 @@ export const SessionHeader = ({ session }: { session: SessionInfo }) => {
           <Badge variant={statusVariant[session.state]}>{statusLabel[session.state]}</Badge>
         </div>
         <div className="flex items-center gap-2">
+          <ProxyDialog sid={session.id} proxy={session.proxy} />
           {session.paired}
           {session.paired ? (
               <Button variant="outline" size="sm" disabled={busy} onClick={() => run(() => logoutSession(session.id))}>

@@ -1,3 +1,5 @@
+import type { ProxyInfo } from "./proxy";
+
 export type SessionState = "connecting" | "qr" | "open" | "logged_out";
 
 export type SessionInfo = {
@@ -6,4 +8,5 @@ export type SessionInfo = {
   jid: string;
   state: SessionState;
   paired: boolean;
+  proxy?: ProxyInfo;
 };

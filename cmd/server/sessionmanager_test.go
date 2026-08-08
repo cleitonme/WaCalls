@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
@@ -39,7 +38,9 @@ func (m *SessionManager) addUnconnected(t *testing.T, name string) *Session {
 	if err := m.store.insert(m.appCtx, id, name); err != nil {
 		t.Fatal(err)
 	}
-	client := whatsmeow.NewClient(m.container.NewDevice(), waLog.Noop)
+	// Passa pelo helper newWAClient para exercer o caminho de proxy (offline-safe:
+	// nenhuma sessão de teste tem proxy, getProxy devolve Enabled=false).
+	client := newWAClient(m, m.container.NewDevice(), id)
 	s := newSession(m, id, name, client)
 	m.register(s)
 	return s

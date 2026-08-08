@@ -31,6 +31,9 @@ type Session struct {
 
 	mu   sync.Mutex
 	auth AuthSnapshot
+
+	proxyMu   sync.RWMutex
+	proxyInfo *ProxyInfo // mascarado; populado uma vez em newSession e renovado em SetProxy (sem DB em info())
 }
 
 func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) *Session {
@@ -42,6 +45,12 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 		client: client,
 		auth:   AuthSnapshot{State: "connecting"},
 		reg:    newCallRegistry(),
+	}
+	// Lê a config de proxy uma única vez (info() é chamado a cada broadcast SSE;
+	// fazer DB read por sessão por broadcast seria caro em produção).
+	if cfg, err := mgr.store.getProxy(context.Background(), id); err == nil && cfg.Enabled {
+		mi := cfg.masked()
+		s.proxyInfo = &mi
 	}
 	client.AddEventHandler(s.handleEvent)
 	return s
@@ -239,7 +248,23 @@ func (s *Session) info() SessionInfo {
 	if id := s.client.Store.ID; id != nil {
 		jid = id.String()
 	}
-	return SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != ""}
+	s.proxyMu.RLock()
+	proxy := s.proxyInfo
+	s.proxyMu.RUnlock()
+	return SessionInfo{ID: s.id, Name: s.name, JID: jid, State: a.State, Paired: a.Paired || jid != "", Proxy: proxy}
+}
+
+// setProxyInfo atualiza o cache mascarado de proxy exibido em info(). Recebe a
+// ProxyConfig bruta (com senha) e deriva a forma mascarada internamente.
+func (s *Session) setProxyInfo(cfg ProxyConfig) {
+	s.proxyMu.Lock()
+	defer s.proxyMu.Unlock()
+	if !cfg.Enabled {
+		s.proxyInfo = nil
+		return
+	}
+	mi := cfg.masked()
+	s.proxyInfo = &mi
 }
 
 func (s *Session) setBridge(callID string, b *Bridge) {

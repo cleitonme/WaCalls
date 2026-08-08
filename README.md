@@ -196,15 +196,84 @@ originating `sessionId`.
 | `POST` | `/api/sessions/{sid}/calls/{id}/reject` | Reject an incoming call |
 | `DELETE` | `/api/sessions/{sid}/calls/{id}` | End an active call |
 | `GET` | `/api/sessions/{sid}/history` | Recent call history (up to 50 records) |
+| `GET` | `/api/sessions/{sid}/proxy` | Get the channel's proxy config (password masked) |
+| `POST` | `/api/sessions/{sid}/proxy` | Save proxy config and reconnect the channel |
+| `POST` | `/api/sessions/{sid}/proxy/test` | Test proxy reachability without saving |
 | `GET` | `/api/events` | Server-sent events (sessions, auth, call lifecycle) |
+
+### Proxy
+
+Each channel can route its WhatsApp connections (websocket + media) through an
+**HTTP**, **HTTPS**, or **SOCKS5** proxy, independent per channel. The proxy is
+applied when the whatsmeow client is created — so saving a new proxy disconnects
+and reconnects the channel. **Hang up active calls before changing the proxy**
+(the server returns `409` otherwise).
+
+Persisted columns on the `sessions` table (added idempotently on first boot —
+no manual migration needed):
+
+| Column | Type | Notes |
+|---|---|---|
+| `proxy_enabled` | INTEGER | `0`/`1` |
+| `proxy_type` | TEXT | `HTTP` / `HTTPS` / `SOCKS5` |
+| `proxy_host` | TEXT | required when enabled |
+| `proxy_port` | INTEGER | 1–65535 |
+| `proxy_username` | TEXT | optional |
+| `proxy_password` | TEXT | stored in plaintext (same as whatsmeow keys); **never returned** |
+
+The password is **never** exposed: `GET …/proxy` and `SessionInfo.proxy` return
+`proxyPassword` as `""` plus `proxySet` (`true` if a password is stored). Leave the
+password blank on save to **preserve** the current one.
+
+#### POST `/api/sessions/{sid}/proxy` — save
+
+```json
+{
+  "proxyEnabled": true,
+  "proxyType": "SOCKS5",
+  "proxyHost": "proxy.meudominio.com",
+  "proxyPort": 1080,
+  "proxyUsername": "usuario",
+  "proxyPassword": "senha"
+}
+```
+
+Returns `{"ok": true}` and reconnects. Codes: `200`, `400` (invalid config),
+`404` (no session), `409` (active calls), `500`.
+
+#### POST `/api/sessions/{sid}/proxy/test` — test (no save)
+
+Body: the same `ProxyConfig` above, plus optional `timeoutMs` (default 10000,
+max 30000). An empty body tests the persisted config. The backend does a short
+HTTPS `GET` through the proxy (SOCKS5 via `golang.org/x/net/proxy`) to fetch the
+exit IP — it does **not** boot a whatsmeow client.
+
+Response:
+
+```json
+{ "success": true, "latencyMs": 123, "exitIP": "203.0.113.5", "errorCategory": "" }
+```
+
+On failure `success` is `false` and `errorCategory` is one of: `timeout`,
+`auth`, `host_invalid`, `scheme_invalid`, `connection_failed`, `http_error`,
+`invalid`, `unknown`. Codes: `200` (always — the body carries success/failure),
+`400` (invalid config), `404` (no session).
 
 ---
 
 ## Tests
 
 ```bash
-go test ./...                 # media stack: SRTP, STUN, RTP, relay-ack, codec, state
+go test ./...                 # media stack: SRTP, STUN, RTP, relay-ack, codec, state, proxy
 cd client && npm run build    # client type-check + production build
+```
+
+Proxy probe tests hit live proxies and are gated behind a build tag + env so the
+default suite never flakes offline:
+
+```bash
+WACALLS_PROXY_NETTEST=1 WACALLS_TEST_PROXY_HTTP=http://user:pass@host:port \
+  go test -tags=proxynet ./cmd/server/ -run TestProbe -v
 ```
 
 ---

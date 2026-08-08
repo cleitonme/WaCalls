@@ -6,7 +6,8 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/whatsmeow v0.0.0-20260804144817-1494ba731cb0
+	go.mau.fi/whatsmeow v0.0.0-20260806224404-e277b766ab33
+	golang.org/x/net v0.57.0
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.53.0
 )
@@ -44,7 +45,6 @@ require (
 	go.mau.fi/util v0.9.12-0.20260717235539-f9ffa7eca58d // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect

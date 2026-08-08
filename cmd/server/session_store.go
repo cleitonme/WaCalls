@@ -56,24 +56,7 @@ func deleteExistingDevice(db *sql.DB, jid string) error {
 // deviceColumns returns the actual column list for whatsmeow_device by probing the DB,
 // since different whatsmeow versions have different columns (e.g. some lack "lid").
 func deviceColumns(db *sql.DB) ([]string, error) {
-	rows, err := db.Query(`PRAGMA table_info(whatsmeow_device)`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var cols []string
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull int
-		var dflt interface{}
-		var pk int
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err == nil {
-			cols = append(cols, name)
-		}
-	}
-	return cols, rows.Err()
+	return tableColumns(db, "whatsmeow_device")
 }
 
 func contains(slice []string, s string) bool {
