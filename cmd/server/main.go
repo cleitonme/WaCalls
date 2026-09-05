@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var version = "1.0.1"
+var version = "1.0.2"
 
 // envInt lê um inteiro de uma variável de ambiente (com valor padrão).
 func envInt(key string, def int) int {
