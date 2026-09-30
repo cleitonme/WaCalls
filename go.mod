@@ -6,7 +6,7 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/whatsmeow v0.0.0-20260909164725-b25a56d63729
+	go.mau.fi/whatsmeow v0.0.0-20260929112325-8b41cfe6d9c4
 	golang.org/x/net v0.59.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.53.0
@@ -22,7 +22,7 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/petermattis/goid v0.0.0-20260816044145-ed329add6b1b // indirect
+	github.com/petermattis/goid v0.0.0-20260820044319-269ab09b5261 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/ice/v4 v4.2.7 // indirect
@@ -39,12 +39,12 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/vektah/gqlparser/v2 v2.5.37 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.58 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
-	go.mau.fi/util v0.10.1-0.20260820140024-eb612d936fde // indirect
+	go.mau.fi/util v0.10.1 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
