@@ -1,33 +1,32 @@
-# Build and push the pure-Go Docker image from Windows PowerShell.
-# Usage: .\build-pure.ps1 [-Push] [-Platform "linux/amd64"]
+$ErrorActionPreference = "Continue"
+$PSNativeCommandUseErrorActionPreference = $false
 
-param(
-  [switch]$Push,
-  [string]$Platform = "linux/amd64"
-)
+$IMAGE_NAME = "whazing/wacalls:latest"
+$BUILDER_NAME = "whazing-builder"
 
-$ErrorActionPreference = "Stop"
+Write-Host "Verificando se builder '$BUILDER_NAME' existe..."
 
-$ImageName = "whazing/wacalls:latest"
-$BuilderName = "whazing-builder"
-$PushArg = if ($Push) { "--push" } else { "" }
-
-Write-Host "Building PURE-GO variant (CGO_ENABLED=0, no native encoder)..." -ForegroundColor Cyan
-
-$builderExists = docker buildx inspect $BuilderName 2>$null
+docker buildx inspect $BUILDER_NAME *> $null
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "Creating builder '$BuilderName'..."
-  docker buildx create --name $BuilderName --driver docker-container --use
-  docker buildx inspect --bootstrap
+    Write-Host "Builder nao existe. Criando builder '$BUILDER_NAME'..."
+    docker buildx create --name $BUILDER_NAME --driver docker-container --use 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { exit 1 }
 } else {
-  docker buildx use $BuilderName
+    Write-Host "Builder '$BUILDER_NAME' ja existe. Usando ele."
+    docker buildx use $BUILDER_NAME 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { exit 1 }
 }
 
-$args = @("buildx", "build", "--platform", $Platform, "--build-arg", "VARIANT=pure", "-t", $ImageName)
-if ($Push) { $args += "--push" }
-$args += "."
+Write-Host "Iniciando build multiplataforma e push da imagem $IMAGE_NAME..."
 
-docker @args
-if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
+docker buildx build `
+  --platform linux/amd64 `
+  -t $IMAGE_NAME `
+  --push . 2>&1 | ForEach-Object { Write-Host $_ }
 
-Write-Host "Done: $ImageName (pure-go)" -ForegroundColor Green
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Erro no build/push."
+    exit 1
+}
+
+Write-Host "Build e push concluidos com sucesso!"
