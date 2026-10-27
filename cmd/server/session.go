@@ -224,6 +224,7 @@ func (s *Session) handleEvent(rawEvt any) {
 }
 
 func (s *Session) connect(ctx context.Context) error {
+	s.mgr.resolveWAVersion(ctx)
 	if s.client.Store.ID != nil {
 		return s.client.Connect()
 	}
@@ -231,6 +232,7 @@ func (s *Session) connect(ctx context.Context) error {
 }
 
 func (s *Session) startPairing(ctx context.Context) error {
+	s.mgr.resolveWAVersion(ctx)
 	qrChan, err := s.client.GetQRChannel(ctx)
 	if err != nil {
 		return err

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var version = "1.0.5"
+var version = "1.0.6"
 
 // envInt lê um inteiro de uma variável de ambiente (com valor padrão).
 func envInt(key string, def int) int {
@@ -31,6 +31,7 @@ func main() {
 	staticDir := flag.String("static", "client/dist", "static client directory (optional)")
 	debug := flag.Bool("debug", false, "verbose logging")
 	maxCalls := flag.Int("max-calls-per-session", envInt("WACALLS_MAX_CALLS", 1), "max concurrent calls per session (0 = unlimited)")
+	waVersionURLs := flag.String("wa-version-url", os.Getenv("WACALLS_WA_VERSION_URL"), "comma-separated WhatsApp Web version JSON sources (default: WuzAPI sources)")
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -43,7 +44,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	srv, err := newServer(ctx, *dbPath, *staticDir, *maxCalls, log)
+	srv, err := newServer(ctx, *dbPath, *staticDir, *maxCalls, parseWAVersionURLs(*waVersionURLs), log)
 	if err != nil {
 		log.Error("startup failed", "err", err)
 		os.Exit(1)

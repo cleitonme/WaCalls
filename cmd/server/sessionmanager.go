@@ -19,6 +19,7 @@ type SessionManager struct {
 	waLogger  waLog.Logger
 	log       *slog.Logger
 	maxCalls  int
+	waVersion *waVersionResolver
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
@@ -28,7 +29,7 @@ type SessionManager struct {
 	imports map[string]importStatus
 }
 
-func newSessionManager(ctx context.Context, container *sqlstore.Container, broker *Broker, store *sessionStore, waLogger waLog.Logger, log *slog.Logger, maxCalls int) *SessionManager {
+func newSessionManager(ctx context.Context, container *sqlstore.Container, broker *Broker, store *sessionStore, waLogger waLog.Logger, log *slog.Logger, maxCalls int, waVersion *waVersionResolver) *SessionManager {
 	return &SessionManager{
 		appCtx:    ctx,
 		container: container,
@@ -37,8 +38,17 @@ func newSessionManager(ctx context.Context, container *sqlstore.Container, broke
 		waLogger:  waLogger,
 		log:       log,
 		maxCalls:  maxCalls,
+		waVersion: waVersion,
 		sessions:  map[string]*Session{},
 		imports:   map[string]importStatus{},
+	}
+}
+
+// resolveWAVersion aplica a versão do WhatsApp Web mais recente antes de um
+// handshake. Nil (testes) desliga a resolução, mantendo a versão do whatsmeow.
+func (m *SessionManager) resolveWAVersion(ctx context.Context) {
+	if m.waVersion != nil {
+		m.waVersion.Resolve(ctx)
 	}
 }
 

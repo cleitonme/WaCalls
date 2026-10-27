@@ -175,6 +175,15 @@ go run ./cmd/server -static client/dist -addr :8080
 | `-static` | `client/dist` | Static client directory (optional) |
 | `-debug` | `false` | Verbose logging (includes whatsmeow's internal log) |
 | `-max-calls-per-session` | `8` | Max concurrent calls per session (`0` = unlimited) |
+| `-wa-version-url` | WuzAPI sources | Comma-separated `waversion.json` sources (also `WACALLS_WA_VERSION_URL`) |
+
+#### WhatsApp Web version
+
+Before every connect/pairing, WaCalls fetches the current WhatsApp Web version from the
+same sources used by WuzAPI and applies it with `store.SetWAVersion()`. The result is
+cached for 24h. The remote version is only applied when it is newer than the version
+embedded in whatsmeow; if every source fails, the embedded version is kept and the
+server logs a warning (a fetch failure never aborts startup or the connection).
 
 ---
 
