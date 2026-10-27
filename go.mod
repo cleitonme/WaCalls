@@ -6,7 +6,7 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/whatsmeow v0.0.0-20261017175727-b2b1e71d45e2
+	go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b
 	golang.org/x/net v0.61.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.53.0
@@ -39,7 +39,7 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/vektah/gqlparser/v2 v2.5.63 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.64 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/util v0.11.0 // indirect
