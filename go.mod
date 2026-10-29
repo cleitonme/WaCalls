@@ -6,8 +6,8 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b
-	golang.org/x/net v0.61.0
+	go.mau.fi/whatsmeow v0.0.0-20261028111316-d24d079a3755
+	golang.org/x/net v0.62.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.53.0
 )
