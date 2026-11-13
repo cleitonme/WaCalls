@@ -11,10 +11,10 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, peerJid types.JID) {
+func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, peerJid types.JID) bool {
 	info := signaling.ExtractNodeInfo(node)
 	if info == nil {
-		return
+		return false
 	}
 	callID := info.CallID
 	creator := wanode.AttrString(info.InnerNode.Attrs, "call-creator")
@@ -92,6 +92,7 @@ func (m *CallManager) HandleCallOffer(ctx context.Context, node *waBinary.Node, 
 	m.emitState()
 	m.mu.Unlock()
 	m.log.Info("incoming call", "call_id", callID, "peer", peerJid.String(), "video", isVideo, "relays", len(relays))
+	return true
 }
 
 func (m *CallManager) HandleCallAccept(ctx context.Context, node *waBinary.Node, peerJid types.JID) {

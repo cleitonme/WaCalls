@@ -146,6 +146,16 @@ func (b *Broker) setOwner(id, owner string) bool {
 	return true
 }
 
+func (b *Broker) isCallConnected(id string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	c, ok := b.calls[id]
+	if !ok {
+		return false
+	}
+	return c.Status == StatusConnected
+}
+
 func (b *Broker) ownerActiveCall(owner string) string {
 	if owner == "" {
 		return ""

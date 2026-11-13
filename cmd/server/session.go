@@ -20,6 +20,8 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
+var ringingTimeout = 90 * time.Second
+
 type Session struct {
 	id   string
 	name string
@@ -60,12 +62,44 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 
 func (s *Session) createCall(callID string) *call.CallManager {
 	cm := call.NewCallManager(wa.NewSocket(s.client), s.log)
-	s.wireCall(cm, callID)
-	s.reg.add(callID, &activeCall{cm: cm})
+	stopRinging := s.wireCall(cm, callID)
+	s.reg.add(callID, &activeCall{cm: cm, stopRinging: stopRinging})
 	return cm
 }
 
-func (s *Session) wireCall(cm *call.CallManager, callID string) {
+func (s *Session) wireCall(cm *call.CallManager, callID string) func() {
+	var timeoutTimer *time.Timer
+	var timeoutMu sync.Mutex
+
+	stopTimeout := func() {
+		timeoutMu.Lock()
+		defer timeoutMu.Unlock()
+		if timeoutTimer != nil {
+			timeoutTimer.Stop()
+			timeoutTimer = nil
+		}
+	}
+
+	startTimeout := func() {
+		timeoutMu.Lock()
+		defer timeoutMu.Unlock()
+		if timeoutTimer != nil {
+			timeoutTimer.Stop()
+		}
+		timeoutTimer = time.AfterFunc(ringingTimeout, func() {
+			if _, ok := s.reg.get(callID); !ok {
+				return
+			}
+			if s.mgr.broker.isCallConnected(callID) {
+				s.log.Info("call ringing timeout: call already active in broker, skipping", "call_id", callID)
+				return
+			}
+			s.log.Info("call ringing timeout reached, ending stale call", "call_id", callID, "after", ringingTimeout)
+			_ = cm.EndCall(context.Background(), core.EndCallReasonTimeout)
+			s.removeCall(callID)
+		})
+	}
+
 	cm.OnIncoming = func(c *call.CallInfo) {
 		s.mgr.broker.upsertCall(CallRecord{
 			SessionID: s.id, CallID: c.CallID, Direction: "inbound", Peer: c.PeerJid,
@@ -77,15 +111,13 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		if c.IsEnded() {
 			s.log.Info("call ended", "call_id", c.CallID, "reason", string(c.StateData.EndReason))
 			s.removeCall(c.CallID)
-			// Only end the broker record if this session owns it. Sibling sessions
-			// for the same number may terminate with accepted_elsewhere while the
-			// accepting session is still active; letting them call endCall would
-			// broadcast call-ended for the active session's call and cause the
-			// frontend to tear it down.
 			if rec, ok := s.mgr.broker.getCall(c.CallID); !ok || rec.SessionID == s.id {
 				s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
 			}
 			return
+		}
+		if c.StateData.State == core.CallStateActive || c.StateData.State == core.CallStateConnecting {
+			stopTimeout()
 		}
 		dir := "outbound"
 		if c.Direction == core.CallDirectionIncoming {
@@ -116,6 +148,18 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		}
 		_ = ac.bridge.WritePCM(pcm16)
 	}
+	return func() {
+		stopTimeout()
+		startTimeout()
+	}
+}
+
+func (s *Session) startIncomingCallTimer(callID string) {
+	ac, ok := s.reg.get(callID)
+	if !ok {
+		return
+	}
+	ac.stopRinging()
 }
 
 func (s *Session) startOutgoing(ctx context.Context, peer types.JID, isVideo bool) (string, error) {
@@ -153,6 +197,7 @@ func (s *Session) onIncomingOfferDirect(ctx context.Context, from types.JID, nod
 	}
 	cm := s.createCall(callID)
 	cm.HandleCallOffer(ctx, node, from)
+	s.startIncomingCallTimer(callID)
 }
 
 func (s *Session) rejectOffer(ctx context.Context, node *waBinary.Node, from types.JID) {
