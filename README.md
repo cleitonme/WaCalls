@@ -38,6 +38,11 @@ concurrent 1:1 calls** at once — one per browser operator — routed independe
 > **Status:** stable. Outgoing and incoming 1:1 calls reach `ACTIVE` with bidirectional
 > audio, and a single account can hold several of them concurrently. Sessions persist in
 > `wacalls.db` (pure-Go SQLite).
+>
+> **Note on incoming calls and max-calls-per-session:** When the configured call limit is
+> reached and a new incoming call arrives, the WaCalls device does NOT send a reject
+> stanza to the caller. This allows other devices linked to the same WhatsApp account
+> (e.g., the phone) to continue ringing and accept the call normally.
 
 ---
 
@@ -174,7 +179,7 @@ go run ./cmd/server -static client/dist -addr :8080
 | `-db` | `wacalls.db` | SQLite session database path |
 | `-static` | `client/dist` | Static client directory (optional) |
 | `-debug` | `false` | Verbose logging (includes whatsmeow's internal log) |
-| `-max-calls-per-session` | `8` | Max concurrent calls per session (`0` = unlimited) |
+| `-max-calls-per-session` | `1` | Max concurrent calls per session (`0` = unlimited) |
 | `-wa-version-url` | WuzAPI sources | Comma-separated `waversion.json` sources (also `WACALLS_WA_VERSION_URL`) |
 
 #### WhatsApp Web version

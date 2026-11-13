@@ -137,17 +137,22 @@ func (s *Session) callForEvent(from types.JID, data *waBinary.Node) (*activeCall
 }
 
 func (s *Session) onIncomingOffer(ctx context.Context, evt *events.CallOffer) {
-	node := wrapCall(evt.From, evt.Data)
+	s.onIncomingOfferDirect(ctx, evt.From, wrapCall(evt.From, evt.Data))
+}
+
+func (s *Session) onIncomingOfferDirect(ctx context.Context, from types.JID, node *waBinary.Node) {
 	callID := callIDFromNode(node)
 	if callID == "" {
 		return
 	}
 	if max := s.mgr.maxCalls; max > 0 && s.reg.count() >= max {
-		s.rejectOffer(ctx, node, evt.From)
+		s.log.Info("incoming call ignored: session at capacity (not rejected to avoid affecting other devices)",
+			"call_id", callID, "current_calls", s.reg.count(), "max_calls", max,
+			"peer", from.String())
 		return
 	}
 	cm := s.createCall(callID)
-	cm.HandleCallOffer(ctx, node, evt.From)
+	cm.HandleCallOffer(ctx, node, from)
 }
 
 func (s *Session) rejectOffer(ctx context.Context, node *waBinary.Node, from types.JID) {
@@ -161,7 +166,7 @@ func (s *Session) rejectOffer(ctx context.Context, node *waBinary.Node, from typ
 	}
 	reject := signaling.BuildRejectStanza(from, info.CallID, wanode.MustJID(creator))
 	_ = wa.NewSocket(s.client).SendNode(ctx, reject)
-	s.log.Info("inbound call rejected: session at capacity", "call_id", info.CallID)
+	s.log.Info("inbound call rejected via stanza", "call_id", info.CallID)
 }
 
 func (s *Session) handleEvent(rawEvt any) {
