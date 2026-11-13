@@ -351,8 +351,54 @@ func (ts *testServer) do(t *testing.T, method, path, body string) *httptest.Resp
 	}
 	req.Header.Set("X-API-Key", "test-key")
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	return rec
+rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+}
+
+// --- Presence Endpoint Tests ---
+
+func TestHandleSessionPresence_NotFoundSession(t *testing.T) {
+	srv := newTestServer(t)
+	rec := srv.do(t, http.MethodPost, "/api/sessions/inexistente/presence", `{}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("esperado 404, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSessionPresence_InvalidState(t *testing.T) {
+	srv, sid := newTestServerWithSession(t)
+	rec := srv.do(t, http.MethodPost, "/api/sessions/"+sid+"/presence", `{"state": "invalid"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSessionPresence_Available(t *testing.T) {
+	srv, sid := newTestServerWithSession(t)
+	rec := srv.do(t, http.MethodPost, "/api/sessions/"+sid+"/presence", `{"state": "available"}`)
+	// 502 BadGateway expected because the client is not actually connected
+	// (it's a mock device without real WhatsApp connection)
+	if rec.Code != http.StatusBadGateway && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("esperado 502 ou 503, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSessionPresence_Unavailable(t *testing.T) {
+	srv, sid := newTestServerWithSession(t)
+	rec := srv.do(t, http.MethodPost, "/api/sessions/"+sid+"/presence", `{"state": "unavailable"}`)
+	// 502 BadGateway expected because the client is not actually connected
+	if rec.Code != http.StatusBadGateway && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("esperado 502 ou 503, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSessionPresence_DefaultAvailable(t *testing.T) {
+	srv, sid := newTestServerWithSession(t)
+	// Without body, should default to available
+	rec := srv.do(t, http.MethodPost, "/api/sessions/"+sid+"/presence", "")
+	if rec.Code != http.StatusBadGateway && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("esperado 502 ou 503, got %d (%s)", rec.Code, rec.Body.String())
+	}
 }
 

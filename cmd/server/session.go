@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wacalls/internal/voip/call"
@@ -35,9 +38,10 @@ type Session struct {
 	auth AuthSnapshot
 
 	proxyMu   sync.RWMutex
-	proxyInfo *ProxyInfo // mascarado; populado uma vez em newSession e renovado em SetProxy (sem DB em info())
+	proxyInfo *ProxyInfo
 
-	presenceOnce sync.Once // garante 1 keepalive de presença por sessão
+	lastPulse atomic.Int64
+	pulsing   atomic.Bool
 }
 
 func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) *Session {
@@ -222,11 +226,10 @@ func (s *Session) handleEvent(rawEvt any) {
 			_ = s.mgr.store.setJID(s.mgr.appCtx, s.id, id.String())
 		}
 		s.setAuth(AuthSnapshot{State: "open", Paired: true})
-		// Companheiro (coex) só continua "callable" se anunciar presença ativa.
-		// Sem isso o WA tende a marcar o device como uncallable após a 1ª ligação
-		// → a 2ª nem toca. Anuncia no connect e mantém com keepalive.
-		s.markAvailable(ctx)
+		s.refreshPresence(ctx)
 		s.startPresenceKeepalive()
+	case *events.PushNameSetting:
+		go s.refreshPresence(ctx)
 	case *events.LoggedOut:
 		s.setAuth(AuthSnapshot{State: "logged_out", Paired: false})
 	case *events.CallOffer:
@@ -402,9 +405,10 @@ func (s *Session) isSelfDevice(from types.JID) bool {
 	return false
 }
 
-// markAvailable anuncia presença "available" (mantém o device callable no WA).
-// SendPresence exige PushName não-vazio — companheiro às vezes vem sem, então
-// setamos um nome estável antes de anunciar.
+const presencePulseDuration = 30 * time.Second
+
+const presencePulseMinGap = time.Hour
+
 func (s *Session) markAvailable(ctx context.Context) {
 	if s.client == nil || s.client.Store == nil || s.client.Store.ID == nil {
 		return
@@ -423,21 +427,63 @@ func (s *Session) markAvailable(ctx context.Context) {
 	s.log.Info("🟢 presença available anunciada (mantém companheiro callable)")
 }
 
-// startPresenceKeepalive re-anuncia presença periodicamente (o WA expira a
-// presença ativa por inatividade). 1 goroutine por sessão.
+func (s *Session) refreshPresence(ctx context.Context) {
+	if time.Since(time.Unix(0, s.lastPulse.Load())) >= presencePulseMinGap {
+		s.presencePulse(ctx)
+		return
+	}
+	if s.pulsing.Load() {
+		return
+	}
+	if err := s.sendPresenceTimeout(ctx, types.PresenceUnavailable); err != nil {
+		s.log.Warn("failed to send presence unavailable", "err", err)
+	}
+}
+
+func (s *Session) presencePulse(ctx context.Context) {
+	if !s.pulsing.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.pulsing.Store(false)
+	if err := s.sendPresenceTimeout(ctx, types.PresenceAvailable); err != nil {
+		if strings.Contains(err.Error(), "pushname") {
+			s.log.Debug("presence pulse deferred until pushname arrives")
+		} else {
+			s.log.Warn("presence pulse failed", "err", err)
+		}
+		return
+	}
+	s.lastPulse.Store(time.Now().UnixNano())
+	s.log.Info("presence pulse sent")
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(presencePulseDuration):
+	}
+	if err := s.sendPresenceTimeout(ctx, types.PresenceUnavailable); err != nil {
+		s.log.Warn("presence pulse: failed to return to unavailable", "err", err)
+	} else {
+		s.log.Debug("presence pulse ended")
+	}
+}
+
+func (s *Session) sendPresenceTimeout(ctx context.Context, state types.Presence) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.client.SendPresence(ctx, state)
+}
+
 func (s *Session) startPresenceKeepalive() {
-	s.presenceOnce.Do(func() {
-		go func() {
-			t := time.NewTicker(4 * time.Minute)
-			defer t.Stop()
-			for range t.C {
-				if s.client == nil || !s.client.IsConnected() {
-					continue
-				}
-				s.markAvailable(context.Background())
+	go func() {
+		t := time.NewTicker(4 * time.Minute)
+		defer t.Stop()
+		for range t.C {
+			if s.client == nil || !s.client.IsConnected() {
+				continue
 			}
-		}()
-	})
+			s.refreshPresence(context.Background())
+		}
+	}()
 }
 
 func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
@@ -467,6 +513,16 @@ func (s *Session) replaceClient(client *whatsmeow.Client) {
 func (s *Session) shutdown() {
 	s.teardownAllCalls()
 	s.client.Disconnect()
+}
+
+func (s *Session) SendPresence(ctx context.Context, state types.Presence) error {
+	s.mu.Lock()
+	client := s.client
+	s.mu.Unlock()
+	if client == nil || !client.IsConnected() {
+		return fmt.Errorf("session not connected")
+	}
+	return client.SendPresence(ctx, state)
 }
 
 func mapStatus(state core.CallState) CallStatus {

@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"sync"
+	"time"
 
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -30,7 +33,7 @@ type SessionManager struct {
 }
 
 func newSessionManager(ctx context.Context, container *sqlstore.Container, broker *Broker, store *sessionStore, waLogger waLog.Logger, log *slog.Logger, maxCalls int, waVersion *waVersionResolver) *SessionManager {
-	return &SessionManager{
+	m := &SessionManager{
 		appCtx:    ctx,
 		container: container,
 		broker:    broker,
@@ -42,6 +45,8 @@ func newSessionManager(ctx context.Context, container *sqlstore.Container, broke
 		sessions:  map[string]*Session{},
 		imports:   map[string]importStatus{},
 	}
+	m.startPresenceKeepalive()
+	return m
 }
 
 // resolveWAVersion aplica a versão do WhatsApp Web mais recente antes de um
@@ -262,5 +267,49 @@ func (m *SessionManager) disconnectAll() {
 	m.mu.RUnlock()
 	for _, s := range all {
 		s.shutdown()
+	}
+}
+
+func (m *SessionManager) startPresenceKeepalive() {
+	interval := 24 * time.Hour
+	if durVal := os.Getenv("WA_PRESENCE_INTERVAL"); durVal != "" {
+		if d, err := time.ParseDuration(durVal); err == nil && d > 0 {
+			interval = d
+		}
+	} else if envVal := os.Getenv("WA_PRESENCE_INTERVAL_HOURS"); envVal != "" {
+		if h, err := strconv.Atoi(envVal); err == nil && h > 0 {
+			interval = time.Duration(h) * time.Hour
+		}
+	}
+	m.log.Info("presence keepalive worker started", "interval", interval)
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.appCtx.Done():
+				return
+			case <-ticker.C:
+				m.pulseAll()
+			}
+		}
+	}()
+}
+
+func (m *SessionManager) pulseAll() {
+	m.mu.RLock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.RUnlock()
+
+	for _, s := range sessions {
+		s.mu.Lock()
+		client := s.client
+		s.mu.Unlock()
+		if client != nil && client.IsConnected() {
+			go s.presencePulse(m.appCtx)
+		}
 	}
 }
