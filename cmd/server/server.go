@@ -19,6 +19,9 @@ type server struct {
 	sessions  *SessionManager
 	log       *slog.Logger
 	staticDir string
+	// apiKey é a WACALLS_API_KEY efetiva do processo; usada só para assinar os
+	// tickets curtos do WebSocket de mídia.
+	apiKey string
 }
 
 func openDB(dbPath string) (*sql.DB, error) {

@@ -149,6 +149,25 @@ Values: `websocket`/`ws`, `webrtc`, `auto`. The value is read whenever
 `index.html` is served (and `index.html` is served with `Cache-Control:
 no-cache`), so reload the panel after changing it.
 
+### Short-lived media ticket (optional)
+
+Besides `X-API-Key`/`?apiKey=`, the WebSocket route also accepts a short-lived
+ticket, so a backend that already authorized the operator can hand the browser
+a credential that never reveals the API key:
+
+```
+POST /api/sessions/{sid}/calls/{id}/ws-ticket   (requires the API key)
+→ { "ticket": "...", "expires_in": 60 }
+
+GET  /api/sessions/{sid}/calls/{id}/ws?ticket=...   (subprotocol pcm16)
+```
+
+The ticket is HMAC-SHA256-signed with a key derived from `WACALLS_API_KEY`,
+scoped to one `sid` + `callId` and valid for 60 s. It only authorizes opening
+the socket — the call must still exist in the session registry. `?apiKey=`
+stays supported for existing integrations, and no other `/api/*` route accepts
+tickets.
+
 Limits of the WebSocket transport:
 
 - Audio only (no video), like the panel itself.

@@ -42,6 +42,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{sid}/calls", s.handleStartCall)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/webrtc", s.handleWebRTC)
 	mux.HandleFunc("GET /api/sessions/{sid}/calls/{id}/ws", s.handleWSBridge)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/ws-ticket", s.handleWSTicket)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/reject", s.handleReject)
 	mux.HandleFunc("DELETE /api/sessions/{sid}/calls/{id}", s.handleEndCall)
@@ -80,6 +81,8 @@ func (s *server) routes() http.Handler {
 		key = generateAPIKey()
 		log.Printf("WACALLS_API_KEY not set, generated key: %s", key)
 	}
+	// Guardada para handleWSTicket assinar os tickets de mídia com a mesma key.
+	s.apiKey = key
 	handler = withAuth(handler, key)
 	return withCORS(handler)
 }
@@ -138,6 +141,8 @@ func withCORS(h http.Handler) http.Handler {
 }
 
 // withAuth protege as rotas /api/* com uma API key (header X-API-Key ou ?apiKey=).
+// Exceção: o WebSocket de mídia também aceita ?ticket= (HMAC curto emitido em
+// POST .../ws-ticket), porque o navegador não envia headers no upgrade.
 // Exceções: os arquivos estáticos do painel (precisam carregar a tela de login).
 func withAuth(h http.Handler, key string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +153,7 @@ func withAuth(h http.Handler, key string) http.Handler {
 			if got == "" {
 				got = r.URL.Query().Get("apiKey")
 			}
-			if got != key {
+			if got != key && !allowWSTicket(r, key) {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
