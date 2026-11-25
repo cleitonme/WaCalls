@@ -6,9 +6,19 @@ import (
 	"wacalls/internal/voip/call"
 )
 
+// mediaBridge é o contrato comum das pontes de áudio do navegador: WebRTC
+// (Bridge) e WebSocket (wsBridge). WritePCM leva o downlink (WhatsApp→navegador)
+// como PCM float32 16 kHz mono; DisableTerminate evita que a queda da ponte
+// encerre a chamada; Close libera a conexão.
+type mediaBridge interface {
+	WritePCM(pcm []float32) error
+	DisableTerminate()
+	Close()
+}
+
 type activeCall struct {
 	cm          *call.CallManager
-	bridge      *Bridge
+	bridge      mediaBridge
 	stopRinging func()
 }
 
@@ -51,7 +61,7 @@ func (r *callRegistry) count() int {
 	return len(r.calls)
 }
 
-func (r *callRegistry) setBridge(callID string, b *Bridge) (*Bridge, bool) {
+func (r *callRegistry) setBridge(callID string, b mediaBridge) (mediaBridge, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ac, ok := r.calls[callID]
@@ -72,7 +82,7 @@ func (r *callRegistry) disableTerminalICE(callID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if ac, ok := r.calls[callID]; ok && ac.bridge != nil {
-		ac.bridge.OnTerminalICE = nil
+		ac.bridge.DisableTerminate()
 	}
 }
 

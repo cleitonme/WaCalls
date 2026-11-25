@@ -168,7 +168,9 @@ const pcmChannelLabel = "pcm"
 type Bridge struct {
 	pc  *webrtc.PeerConnection
 	dc  atomic.Pointer[webrtc.DataChannel]
-	log *slog.Logger
+	log      *slog.Logger
+	mu       sync.Mutex
+	silenced bool
 
 	OnBrowserPCM  func(pcm []float32)
 	OnTerminalICE func()
@@ -197,7 +199,7 @@ func NewBridge(offerSDP string, log *slog.Logger) (*Bridge, string, error) {
 		log.Debug("browser ice state", "state", s.String())
 		if s == webrtc.ICEConnectionStateFailed || s == webrtc.ICEConnectionStateClosed {
 			if br.OnTerminalICE != nil {
-				br.OnTerminalICE()
+				br.fireTerminalICE()
 			}
 		}
 	})
@@ -219,6 +221,26 @@ func NewBridge(offerSDP string, log *slog.Logger) (*Bridge, string, error) {
 	<-gatherComplete
 
 	return br, pc.LocalDescription().SDP, nil
+}
+
+// DisableTerminate silencia OnTerminalICE sem fechar a ponte (hold/pickup/
+// transferência: a chamada não depende mais desta ligação de navegador).
+func (b *Bridge) DisableTerminate() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.silenced = true
+}
+
+// fireTerminalICE dispara OnTerminalICE, exceto se a ponte foi silenciada ou já
+// fechada de forma intencional.
+func (b *Bridge) fireTerminalICE() {
+	b.mu.Lock()
+	cb := b.OnTerminalICE
+	silenced := b.silenced
+	b.mu.Unlock()
+	if cb != nil && !silenced {
+		cb()
+	}
 }
 
 func (b *Bridge) WritePCM(pcm []float32) error {

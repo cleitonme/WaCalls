@@ -150,7 +150,11 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) func() {
 		if !ok || ac.bridge == nil {
 			return
 		}
-		_ = ac.bridge.WritePCM(pcm16)
+		if err := ac.bridge.WritePCM(pcm16); err != nil {
+			// Falha de escrita = entrega não aconteceu; loga em vez de descartar
+			// silenciosamente (a ponte loga/encerra quando o socket cai).
+			s.log.Debug("peer audio write failed", "call_id", callID, "err", err)
+		}
 	}
 	return func() {
 		stopTimeout()
@@ -352,7 +356,7 @@ func (s *Session) setProxyInfo(cfg ProxyConfig) {
 	s.proxyInfo = &mi
 }
 
-func (s *Session) setBridge(callID string, b *Bridge) {
+func (s *Session) setBridge(callID string, b mediaBridge) {
 	oldB, found := s.reg.setBridge(callID, b)
 	if !found {
 		b.Close()
@@ -381,8 +385,8 @@ func (s *Session) removeCall(callID string) {
 // Must be used whenever we intentionally tear down the browser-side WebRTC
 // (pickup, call transfer, session shutdown) to avoid the ICEConnectionStateClosed
 // callback firing terminateCall and dropping the WhatsApp call.
-func closeBridge(b *Bridge) {
-	b.OnTerminalICE = nil
+func closeBridge(b mediaBridge) {
+	b.DisableTerminate()
 	b.Close()
 }
 

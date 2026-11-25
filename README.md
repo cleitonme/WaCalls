@@ -120,6 +120,47 @@ by tests in `internal/voip` (`go test ./...`).
 
 ---
 
+## Media transport (WebRTC / WebSocket)
+
+Each browser leg carries raw PCM16 (mono, 16 kHz) either over a WebRTC data
+channel (default) or over a WebSocket at
+`GET /api/sessions/{sid}/calls/{id}/ws` (subprotocol `pcm16`).
+
+Selection order (`client/src/lib/transport.ts`):
+
+1. `?transport=ws|webrtc` in the panel URL
+2. `localStorage["wacalls.transport"]`
+3. `WACALLS_DEFAULT_TRANSPORT`, injected into `index.html` by the server as
+   `window.__WACALLS_DEFAULT_TRANSPORT`
+4. `auto` (default)
+
+`auto` opens WebRTC and, if ICE does not connect within 6 s (UDP blocked by a
+proxy or firewall), closes it and falls back to the WebSocket, which traverses
+any HTTP reverse proxy on 443 and needs no media port. Forcing a mode disables
+the fallback.
+
+To pin the reliable transport per instance, set:
+
+```
+WACALLS_DEFAULT_TRANSPORT=websocket
+```
+
+Values: `websocket`/`ws`, `webrtc`, `auto`. The value is read whenever
+`index.html` is served (and `index.html` is served with `Cache-Control:
+no-cache`), so reload the panel after changing it.
+
+Limits of the WebSocket transport:
+
+- Audio only (no video), like the panel itself.
+- TCP ordering/integrity only while the socket lives: there is no
+  application-level retransmission, send queue or automatic reconnect. If the
+  socket drops, the server ends the call (same as a dead WebRTC bridge).
+- Frames captured while the socket is not `OPEN` are dropped (a warning is
+  logged once); downlink writes are blocking, so a slow consumer applies TCP
+  backpressure instead of growing a buffer.
+- It still depends on the server and the network path; idle proxy timeouts are
+  countered with WebSocket pings every 20 s.
+
 ## Requirements
 
 - **Go 1.26+**

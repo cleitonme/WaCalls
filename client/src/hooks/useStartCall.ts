@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { openCall } from "@/lib/webrtc";
+import { openAdaptiveCall } from "@/lib/webrtc";
 import { startCall } from "@/services/calls";
 import { registerOwnConnection } from "@/stores/calls";
 
@@ -8,7 +8,7 @@ export const useStartCall = (sid: string, micId: string | null) =>
   useMutation({
     mutationFn: async (vars: { phone: string; record: boolean }) => {
       const { call } = await startCall(sid, vars.phone, vars.record);
-      const conn = await openCall(sid, call.callId, micId);
+      const conn = await openAdaptiveCall(sid, call.callId, micId);
       registerOwnConnection(call.callId, conn);
       return call.callId;
     },

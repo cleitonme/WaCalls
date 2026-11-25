@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +41,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{sid}/presence", s.handleSessionPresence)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls", s.handleStartCall)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/webrtc", s.handleWebRTC)
+	mux.HandleFunc("GET /api/sessions/{sid}/calls/{id}/ws", s.handleWSBridge)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/reject", s.handleReject)
 	mux.HandleFunc("DELETE /api/sessions/{sid}/calls/{id}", s.handleEndCall)
@@ -68,7 +71,7 @@ func (s *server) routes() http.Handler {
 
 	if s.staticDir != "" {
 		if _, err := os.Stat(s.staticDir); err == nil {
-			mux.Handle("/", http.FileServer(http.Dir(s.staticDir)))
+			mux.Handle("/", s.staticFileHandler())
 		}
 	}
 	var handler http.Handler = mux
@@ -79,6 +82,38 @@ func (s *server) routes() http.Handler {
 	}
 	handler = withAuth(handler, key)
 	return withCORS(handler)
+}
+
+// staticFileHandler serve o painel estático.
+//
+// - index.html revalida (Cache-Control: no-cache) para o agente sempre pegar a
+//   última versão — um index.html velho apontaria para um bundle antigo (sem o
+//   fallback de transporte da chamada). Os bundles com hash (/assets/…) são
+//   imutáveis e seguem em cache normal.
+// - Se WACALLS_DEFAULT_TRANSPORT estiver setado (ex.: "websocket"), injeta o
+//   valor no index.html (window.__WACALLS_DEFAULT_TRANSPORT). O painel então
+//   usa esse transporte por padrão, sem o agente precisar de ?transport= — útil
+//   em redes/servidores onde o WebRTC (UDP) não fecha e o WS é o caminho
+//   confiável. ?transport= e localStorage continuam tendo prioridade.
+func (s *server) staticFileHandler() http.Handler {
+	fs := http.FileServer(http.Dir(s.staticDir))
+	defaultTransport := strings.TrimSpace(os.Getenv("WACALLS_DEFAULT_TRANSPORT"))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/", "/index.html":
+			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+			if defaultTransport != "" {
+				if b, err := os.ReadFile(filepath.Join(s.staticDir, "index.html")); err == nil {
+					inject := "<script>window.__WACALLS_DEFAULT_TRANSPORT=" + strconv.Quote(defaultTransport) + ";</script>"
+					html := strings.Replace(string(b), "</head>", inject+"</head>", 1)
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					_, _ = w.Write([]byte(html))
+					return
+				}
+			}
+		}
+		fs.ServeHTTP(w, r)
+	})
 }
 
 func generateAPIKey() string {
