@@ -7,7 +7,7 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/whatsmeow v0.0.0-20261126154439-c2ce5c339ae0
+	go.mau.fi/whatsmeow v0.0.0-20261127144454-3fe87b230cba
 	golang.org/x/net v0.63.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.53.0
